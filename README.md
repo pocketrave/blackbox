@@ -20,13 +20,13 @@ your own risk; modified firmware may affect your warranty. It has been tested on
 
 ### Known issues
 
-None recorded for release v050.
+None recorded for release v051.
 
 ## Install
 
 1. Download the stock 3.1.9 firmware from 1010music.
-2. Patch it in your browser with the patcher page (`docs/index.html`, hosted on GitHub Pages and on the author's
-   site; links added at release), or with `python apply.py path/to/BLACKBOX.bin` (writes `out/BLACKBOX.bin`).
+2. Patch it in your browser at <https://pocketrave.live/projects/blackbox> (the page in `docs/`; your file never
+   leaves your computer), or with `python apply.py path/to/BLACKBOX.bin` (writes `out/BLACKBOX.bin`).
 3. Keep the stock file.
 4. Copy the patched file to the SD card root as `BLACKBOX.bin` and boot holding A+B; the update runs.
 5. The splash shows `3.1.9(NN)`.
@@ -39,11 +39,11 @@ Put the stock image at `firmware/BLACKBOX-3.1.9.bin` (see `firmware/README.md`),
 
 ```
 pip install -r requirements.txt
-python mod/build.py 50
+python mod/build.py 51
 ```
 
-The result is byte-identical to release v050: check `out/BLACKBOX.bin` against `output_sha256` in
-`docs/patches/v050.json`. Tests: `python -m pytest tests -q` and `node --test tests/js/patcher.test.mjs`.
+The result is byte-identical to release v051: check `out/BLACKBOX.bin` against `output_sha256` in
+`docs/patches/v051.json`. Tests: `python -m pytest tests -q` and `node --test tests/js/patcher.test.mjs`.
 
 ## How it works
 
