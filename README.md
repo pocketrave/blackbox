@@ -3,7 +3,7 @@
 An unofficial mod for the **original** 1010music Blackbox, applied on top of stock firmware **3.1.9**. It is not
 affiliated with, endorsed by, or supported by 1010music. "1010music" and "Blackbox" are trademarks of 1010music LLC.
 This repository does not contain or distribute 1010music's firmware; the mod only modifies the copy you supply. Use at
-your own risk; modified firmware may affect your warranty. It has been tested on one unit.
+your own risk; modified firmware may affect your warranty. It has been tested on one unit. Project page: <https://pocketrave.live/projects/blackbox>.
 
 ## What it adds
 
@@ -20,12 +20,12 @@ your own risk; modified firmware may affect your warranty. It has been tested on
 
 ### Known issues
 
-None recorded for release v051.
+None recorded for release v052.
 
 ## Install
 
 1. Download the stock 3.1.9 firmware from 1010music.
-2. Patch it in your browser at <https://pocketrave.live/projects/blackbox> (the page in `docs/`; your file never
+2. Patch it in your browser at <https://pocketrave.github.io/blackbox/> (the page in `docs/`; your file never
    leaves your computer), or with `python apply.py path/to/BLACKBOX.bin` (writes `out/BLACKBOX.bin`).
 3. Keep the stock file.
 4. Copy the patched file to the SD card root as `BLACKBOX.bin` and boot holding A+B; the update runs.
@@ -39,11 +39,11 @@ Put the stock image at `firmware/BLACKBOX-3.1.9.bin` (see `firmware/README.md`),
 
 ```
 pip install -r requirements.txt
-python mod/build.py 51
+python mod/build.py 52
 ```
 
-The result is byte-identical to release v051: check `out/BLACKBOX.bin` against `output_sha256` in
-`docs/patches/v051.json`. Tests: `python -m pytest tests -q` and `node --test tests/js/patcher.test.mjs`.
+The result is byte-identical to release v052: check `out/BLACKBOX.bin` against `output_sha256` in
+`docs/patches/v052.json`. Tests: `python -m pytest tests -q` and `node --test tests/js/patcher.test.mjs`.
 
 ## How it works
 
