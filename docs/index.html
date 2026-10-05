@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blackbox pocketrave mod patcher</title>
+<style>
+  :root { --bg: #f6f5f2; --fg: #1d1f23; --muted: #5d636e; --box: #ffffff; --line: #d9dbe0; --accent: #b07d12;
+          --ok: #1f7a35; --err: #b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161a; --fg: #e8e6e1; --muted: #9a9ea8; --box: #1b1e24; --line: #343840; --accent: #e2b043;
+            --ok: #7fd18b; --err: #ef7b6f; }
+  }
+  body { font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); margin: 0; padding: 24px 16px; }
+  main { max-width: 640px; margin: 0 auto; }
+  a { color: var(--accent); }
+  .box { border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin: 20px 0; background: var(--box); }
+  select, input[type=file] { width: 100%; margin: 6px 0 12px; font: inherit; color: inherit; }
+  #status { white-space: pre-wrap; } .ok { color: var(--ok); } .err { color: var(--err); }
+  a.btn { display: inline-block; margin-top: 12px; padding: 10px 16px; background: var(--accent); color: #14161a;
+          border-radius: 6px; text-decoration: none; font-weight: 600; }
+  .fine { color: var(--muted); font-size: .85rem; }
+</style>
+<main>
+  <h1>Blackbox pocketrave mod: patcher</h1>
+  <p>Unofficial mod for the original 1010music Blackbox, built on stock firmware 3.1.9.
+     <a href="https://github.com/pocketrave/blackbox-pocketrave-mod">Features, source and known issues</a>.</p>
+  <ol>
+    <li>Download <b>blackbox 3.1.9</b> from <a href="https://1010music.com/downloads">1010music.com/downloads</a> and unzip it.</li>
+    <li>Choose the <code>BLACKBOX.bin</code> from that zip below. Keep the stock file: it is your way back.</li>
+    <li>Copy the patched file to the root of the microSD card as <code>BLACKBOX.bin</code> and install it like any firmware update.</li>
+  </ol>
+  <div class="box">
+    <label for="rel"><b>Release</b></label>
+    <select id="rel"></select>
+    <label for="f"><b>Your stock 3.1.9 BLACKBOX.bin</b></label>
+    <input id="f" type="file" accept=".bin">
+    <div class="fine">The file is patched in this page. Nothing is uploaded.</div>
+    <div id="status"></div>
+    <div id="dl"></div>
+  </div>
+  <p class="fine">Not affiliated with, endorsed by, or supported by 1010music. "1010music" and "Blackbox" are trademarks of
+  1010music LLC. This page does not contain or distribute 1010music's firmware; it only modifies the copy you supply.
+  Use at your own risk; modified firmware may affect your warranty. To go back, install the stock BLACKBOX.bin the same way.</p>
+</main>
+<script type="module">
+import { applyPatch, loadManifest, PatchError } from "./patcher.js";
+const $ = (id) => document.getElementById(id);
+const say = (t, c) => { $("status").textContent = t; $("status").className = c || ""; };
+let manifest;
+try {
+  manifest = await loadManifest(fetch, "patches/");
+  for (const r of manifest.releases) $("rel").add(new Option(`${r.label} (${r.date})`, r.file));
+} catch (e) { say(e.message, "err"); }
+
+$("f").addEventListener("change", async (e) => {
+  $("dl").replaceChildren();
+  const file = e.target.files[0];
+  if (!file || !manifest) return;
+  try {
+    const r = await fetch(`patches/${$("rel").value}`);
+    if (!r.ok) throw new PatchError(`Could not load the patch (HTTP ${r.status}).`);
+    const patch = await r.json();
+    const out = await applyPatch(new Uint8Array(await file.arrayBuffer()), patch);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([out], { type: "application/octet-stream" }));
+    a.download = "BLACKBOX.bin";
+    a.className = "btn";
+    a.textContent = `Download patched BLACKBOX.bin (${patch.label})`;
+    $("dl").appendChild(a);
+    say(`Stock ${patch.stock_version} confirmed. Patched to ${patch.label} and verified.`, "ok");
+  } catch (err) {
+    say(err instanceof PatchError ? err.message : "Something went wrong: " + err.message, "err");
+  }
+});
+</script>
+</html>
