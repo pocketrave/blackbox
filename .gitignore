@@ -1,0 +1,7 @@
+firmware/*.bin
+firmware/*.BIN
+out/
+mod/build/
+__pycache__/
+.pytest_cache/
+*.zip
