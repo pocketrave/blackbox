@@ -1,0 +1,12 @@
+{
+ "latest": "v052",
+ "releases": [
+  {
+   "version": "v052",
+   "label": "3.1.9(52)",
+   "file": "v052.json",
+   "date": "2026-10-05",
+   "output_sha256": "a499608b700275b5429e22504e90ed180c298c60346a3cb095ab1009ed2ab861"
+  }
+ ]
+}
