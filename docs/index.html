@@ -27,7 +27,7 @@
   <ol>
     <li>Download <b>blackbox 3.1.9</b> from <a href="https://1010music.com/downloads">1010music.com/downloads</a> and unzip it.</li>
     <li>Choose the <code>BLACKBOX.bin</code> from that zip below. Keep the stock file: it is your way back.</li>
-    <li>Copy the patched file to the root of the microSD card as <code>BLACKBOX.bin</code> and install it like any firmware update.</li>
+    <li>Copy the patched file to the root of the microSD card as <code>BLACKBOX.bin</code> and boot the Blackbox holding <b>A+B</b> to install it.</li>
   </ol>
   <div class="box">
     <label for="rel"><b>Release</b></label>
@@ -35,7 +35,7 @@
     <label for="f"><b>Your stock 3.1.9 BLACKBOX.bin</b></label>
     <input id="f" type="file" accept=".bin">
     <div class="fine">The file is patched in this page. Nothing is uploaded.</div>
-    <div id="status"></div>
+    <div id="status" class="fine">If this message stays, open this page from its web address (http/https), not as a local file.</div>
     <div id="dl"></div>
   </div>
   <p class="fine">Not affiliated with, endorsed by, or supported by 1010music. "1010music" and "Blackbox" are trademarks of
@@ -46,15 +46,16 @@
 import { applyPatch, loadManifest, PatchError } from "./patcher.js";
 const $ = (id) => document.getElementById(id);
 const say = (t, c) => { $("status").textContent = t; $("status").className = c || ""; };
+$("status").textContent = "";
 let manifest;
 try {
   manifest = await loadManifest(fetch, "patches/");
   for (const r of manifest.releases) $("rel").add(new Option(`${r.label} (${r.date})`, r.file));
 } catch (e) { say(e.message, "err"); }
 
-$("f").addEventListener("change", async (e) => {
+async function run() {
   $("dl").replaceChildren();
-  const file = e.target.files[0];
+  const file = $("f").files[0];
   if (!file || !manifest) return;
   try {
     const r = await fetch(`patches/${$("rel").value}`);
@@ -71,6 +72,8 @@ $("f").addEventListener("change", async (e) => {
   } catch (err) {
     say(err instanceof PatchError ? err.message : "Something went wrong: " + err.message, "err");
   }
-});
+}
+$("f").addEventListener("change", run);
+$("rel").addEventListener("change", run);
 </script>
 </html>

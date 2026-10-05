@@ -55,6 +55,33 @@ def test_refuses_to_overwrite_stock(tmp_path):
     assert (tmp_path / "stock.bin").read_bytes() == stock
 
 
+def test_refuses_to_overwrite_stock_case_variant(tmp_path):
+    stock, built = images()
+    write(tmp_path / "stock.bin", stock)
+    write(tmp_path / "built.bin", built)
+    flipped = tmp_path / "STOCK.BIN"
+    if not flipped.exists():
+        pytest.skip("case-sensitive filesystem")
+    patch = make_patch.publish(str(tmp_path / "stock.bin"), str(tmp_path / "built.bin"), 52, "2026-10-10", str(tmp_path))
+    assert apply.main([str(tmp_path / "stock.bin"), "--patch", patch, "-o", str(flipped)]) == 1
+    assert (tmp_path / "stock.bin").read_bytes() == stock
+
+
+def test_publish_refuses_non_reproducing_patch(tmp_path, monkeypatch):
+    stock, built = images()
+    write(tmp_path / "stock.bin", stock)
+    write(tmp_path / "built.bin", built)
+    real = make_patch.make_patch
+
+    def corrupt(*a, **k):
+        p = real(*a, **k)
+        p["append"] = "00" * 4 + p["append"]
+        return p
+    monkeypatch.setattr(make_patch, "make_patch", corrupt)
+    with pytest.raises(SystemExit, match="does not reproduce"):
+        make_patch.publish(str(tmp_path / "stock.bin"), str(tmp_path / "built.bin"), 52, "2026-10-10", str(tmp_path))
+
+
 def test_wrong_input_message(tmp_path, capsys):
     stock, built = images()
     write(tmp_path / "stock.bin", stock)

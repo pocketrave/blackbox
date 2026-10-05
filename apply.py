@@ -29,7 +29,8 @@ def main(argv):
     a = ap.parse_args(argv)
     with open(a.patch or latest_patch()) as f:
         patch = json.load(f)
-    if os.path.abspath(a.out) == os.path.abspath(a.stock):
+    norm = lambda x: os.path.normcase(os.path.abspath(x))
+    if norm(a.out) == norm(a.stock) or (os.path.exists(a.out) and os.path.samefile(a.out, a.stock)):
         print("REFUSED: that would overwrite your stock file. Keep it: it is your way back.")
         return 1
     try:

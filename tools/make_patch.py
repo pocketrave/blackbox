@@ -10,7 +10,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from tools.patchlib import make_patch, stock_runs   # noqa: E402
+from tools.patchlib import PatchError, apply_patch, make_patch, stock_runs   # noqa: E402
 
 STOCK_VERSION = "3.1.9"
 
@@ -26,6 +26,12 @@ def publish(stock_path, built_path, nn, date, docs_dir):
     if runs:
         raise SystemExit("REFUSED: payload contains stock bytes (%d runs >= 16 B), first at offset %d"
                          % (len(runs), runs[0][0]))
+    try:
+        again = apply_patch(stock, patch)
+    except PatchError:
+        again = None
+    if again != built:
+        raise SystemExit("REFUSED: patch does not reproduce the built image")
     pdir = os.path.join(docs_dir, "patches")
     os.makedirs(pdir, exist_ok=True)
     out = os.path.join(pdir, version + ".json")
