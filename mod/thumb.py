@@ -469,6 +469,23 @@ def bx(rm):
     return struct.pack("<H", 0x4700 | ((rm & 0xF) << 3))
 
 
+def blx(rm):
+    """BLX rm T1 (v053)."""
+    return struct.pack("<H", 0x4780 | ((rm & 0xF) << 3))
+
+
+def ldrb_w(rt, rn, imm12):
+    """LDRB.W (immediate) T2 - rt = byte [rn + imm12], any registers (rn may be sp), offset 0..4095 (v055)."""
+    _chk(imm12, 12, "imm12")
+    return struct.pack("<HH", 0xF890 | (rn & 0xF), ((rt & 0xF) << 12) | imm12)
+
+
+def strb_w(rt, rn, imm12):
+    """STRB.W (immediate) T2 - byte [rn + imm12] = rt, offset 0..4095 (v055)."""
+    _chk(imm12, 12, "imm12")
+    return struct.pack("<HH", 0xF880 | (rn & 0xF), ((rt & 0xF) << 12) | imm12)
+
+
 if __name__ == "__main__":
     print("thumb.py selftest")
     selftest()

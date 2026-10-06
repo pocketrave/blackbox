@@ -21,8 +21,38 @@ PROD_OFF, SEEN_OFF = 2100, 2108             # mod state: u8 per column (2212 B f
 SEL_OFF = 80
 
 
-def midib(va, L, cave_b_va):
-    c = T.cmp_imm(7, NOTE_LO)
+def midib(va, L, cave_b_va, fill_lo=None):
+    c = b""
+    if fill_lo is not None:                  # v055: notes fill_lo..+7 = fill of column 1..8 if it plays the selected row
+        import trig as TR
+        c += T.cmp_imm(7, fill_lo)
+        c += T.b_cond(va + len(c), "cc", L.get("nofill", va))
+        c += T.cmp_imm(7, fill_lo + 7)
+        c += T.b_cond(va + len(c), "hi", L.get("nofill", va))
+        c += T.ldr_imm(3, 6, 0x10)
+        c += T.cmp_imm(3, 0)
+        c += T.b_cond_w(va + len(c), "eq", P5.NOTE_DONE)
+        c += T.push_lo([0, 1, 2])
+        c += T.ldr_imm32(0, P5.DESC_ARRAY_PTR)
+        c += T.ldr_imm(0, 0, 0)
+        c += T.cmp_imm(0, 0)
+        c += T.b_cond(va + len(c), "eq", L.get("fdone", va))
+        c += T.ldr_imm32(1, LA.STATE_OFF)
+        c += T.add_reg(0, 1)
+        c += T.mov_reg(1, 7)
+        c += T.subs_imm8(1, fill_lo)         # column
+        c = TR._row_plays(c, va, L, 0, 1, 2, 3, "fdone", "m")
+        c = TR._bit(c, 1, 2)                 # r1 = 1 << column
+        c += T.ldr_imm32(2, TR.MIDI_OFF)
+        c += T.add_reg(2, 0)
+        c += T.ldrb_imm(0, 2, 0)
+        c += T.orrs_reg(0, 1)
+        c += T.strb_imm(0, 2, 0)
+        L["fdone"] = va + len(c)
+        c += T.pop_lo([0, 1, 2])
+        c += T.bw(va + len(c), P5.NOTE_DONE)
+        L["nofill"] = va + len(c)
+    c += T.cmp_imm(7, NOTE_LO)
     c += T.b_cond(va + len(c), "cc", L.get("old", va))
     c += T.cmp_imm(7, NOTE_HI)
     c += T.b_cond(va + len(c), "hi", L.get("old", va))

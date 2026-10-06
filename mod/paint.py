@@ -30,6 +30,7 @@ HIDE = ([0x34 + r * 0x680 + c * 0x1A0 for r in range(4) for c in range(4)] +
 # enabled host's current clip (armed while stopped)
 C_GAP, C_HEAD, C_EMPTY, C_NOTES, C_LINE, C_BAR, C_PEND = 13, 2, 1, 9, 3, 5, 15
 SEL_OFF, C_SEL = 80, 4                        # v028: L3 selection (mod state +80/+81), stock blue fill
+SCROLL_ROWS = ((314, 1), (313, 3), (312, 5), (311, 7))   # v056: scroll triangle rows (x, w), apex first
 C_ROWMK = 32                                  # v043: MIDI-actionable row corners, bright yellow #F0E442 (palettes.py)
 ROWMK = ((0, 0, 3, 1), (0, 0, 1, 3), (317, 0, 3, 1), (319, 0, 1, 3),          # (dx, dy, w, h) from the band's
          (0, 39, 3, 1), (0, 37, 1, 3), (317, 39, 3, 1), (319, 37, 1, 3))      # bottom-left (y-up), band 320x40
@@ -259,7 +260,7 @@ def rowmark(va, L):
 
 
 def paint(va, L, colstate_va, table_va, digits_va, rtick_va=None, menudraw_va=None, pvtile_va=None,
-          rowmark_va=None, hdrcol_va=None):
+          rowmark_va=None, hdrcol_va=None, filltile_va=None):
     c = T.push_lo([4, 5, 6, 7], lr=True)
     c += T.sub_sp_imm(FR)
     c += T.mov_reg(4, 0)                      # r4 = view
@@ -366,8 +367,12 @@ def paint(va, L, colstate_va, table_va, digits_va, rtick_va=None, menudraw_va=No
             c += T.b_cond(va + len(c), "ne", L.get("ns" + t, va))
             c += T.movs_imm8(1, C_SEL)       # the selected clip: stock blue fill
             L["ns" + t] = va + len(c)
+            if filltile_va is not None:       # v055: selected row, fill on, clip with FILL notes -> vermillion
+                c += T.movs_imm8(0, k)
+                c += T.ldr_sp(2, NSLOT)
+                c += T.bl(va + len(c), filltile_va)
             # FillRect(cell, r1 colour)
-            for off, v in ((0, x + 1), (4, y + 1), (8, 38), (12, 38)):
+            for off, v in ((0, x + 1), (4, y), (8, 39), (12, 39)):     # v056: 39 x 39, 1-px gaps (was 38 at y+1)
                 c = _imm(c, 0, v); c += T.str_sp(0, RECT + off)
             c += T.add_rd_sp(0, RECT)
             c += T.mov_reg(2, 6)
@@ -384,17 +389,17 @@ def paint(va, L, colstate_va, table_va, digits_va, rtick_va=None, menudraw_va=No
             c += T.ldr_sp(1, NSLOT)
             c += T.cmp_reg(0, 1)
             c += T.b_cond_w(va + len(c), "ne", L.get("np" + t, va))
-            c = _rect(c, va, RECTOUTL, x + 1, y + 1, 38, 38, C_LINE)
-            c = _rect(c, va, RECTOUTL, x + 2, y + 2, 36, 9, C_BAR)
+            c = _rect(c, va, RECTOUTL, x + 1, y, 39, 39, C_LINE)
+            c = _rect(c, va, RECTOUTL, x + 2, y + 1, 37, 9, C_BAR)
             c = _col_ptr(c, 3, k)
             c += T.ldrh_imm(0, 3, 2)
-            c += T.movs_imm8(1, 36)
+            c += T.movs_imm8(1, 37)
             c += T.muls(0, 1)
             c += T.movw(1, 1000)
-            c += T.udiv(0, 0, 1)              # width 0..36
+            c += T.udiv(0, 0, 1)              # width 0..37
             c += T.cmp_imm(0, 0)
             c += T.b_cond(va + len(c), "eq", L.get("np" + t, va))
-            c = _rect(c, va, FILLRECT, x + 2, y + 2, 0, 9, C_BAR, w_from_r0=True)
+            c = _rect(c, va, FILLRECT, x + 2, y + 1, 0, 9, C_BAR, w_from_r0=True)
             L["np" + t] = va + len(c)
             # pending?
             c = _col_ptr(c, 3, k)
@@ -404,6 +409,19 @@ def paint(va, L, colstate_va, table_va, digits_va, rtick_va=None, menudraw_va=No
             c += T.b_cond(va + len(c), "ne", L.get("npe" + t, va))
             c = _rect(c, va, RECTOUTL, x, y, 40, 40, C_PEND)
             L["npe" + t] = va + len(c)
+    # v056: scroll triangles at the right edge: up while rows are hidden above (top > 0), down while below (top < 5)
+    c += T.ldr_sp(0, TOP)
+    c += T.cmp_imm(0, 0)
+    c += T.b_cond_w(va + len(c), "eq", L.get("noup", va))
+    for i, (x_, w_) in enumerate(SCROLL_ROWS):
+        c = _rect(c, va, FILLRECT, x_, 197 - i, w_, 1, C_LINE)
+    L["noup"] = va + len(c)
+    c += T.ldr_sp(0, TOP)
+    c += T.cmp_imm(0, 5)
+    c += T.b_cond_w(va + len(c), "cs", L.get("nodown", va))
+    for i, (x_, w_) in enumerate(SCROLL_ROWS):
+        c = _rect(c, va, FILLRECT, x_, 2 + i, w_, 1, C_LINE)
+    L["nodown"] = va + len(c)
     if rowmark_va is not None:                # v043: corners of the MIDI-actionable (selected) row
         c += T.mov_reg(0, 4)
         c += T.mov_reg(1, 6)

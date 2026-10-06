@@ -29,6 +29,13 @@ C_CUR = 5                                   # selected fill = the piano roll's s
 MINI_OFF, LETTER_OFF = 0xB95C, 0xBAC4       # piano roll view: mini grid (vt 0x080F106C), letter button (id 0xE7)
 MINI_VT, BTN_VT, LETTER_ID = 0x080F106C, 0x080EFE48, 0xE7
 PREV_MODE = 0x8CA5
+# v053: the piano roll's top row = MIDI (mode), Edit, Event, FILL (+ the KEYS pad miniature when shown), no gaps
+SETRECT = 0x080A3758                         # widget SetRect(w, &{x, y, w, h}) = vt slot +0x20 of buttons / miniature
+SETRECT_SLOT = 0x20                          # called through the widget's vtable (0x080BB388 is the grid's, not this)
+ROW_BTNS = ((0xE230, 0xE6), (0xB8BC, 0x27), (0xB81C, 0xCC), (LETTER_OFF, LETTER_ID))   # (view offset, id)
+KEYMINI_OFF, KEYMINI_ID = 0xBA10, 0x11C      # KEYS-mode pad miniature (hidden in the other modes)
+LAYOUT_KEYS = ((0, 69), (70, 69), (140, 69), (210, 69), (282, 38))   # (x, w) with the miniature
+LAYOUT_4 = ((0, 79), (80, 79), (160, 79), (240, 80))                 # (x, w) without it
 NUMS = b"".join(bytes([0x31 + j, 0]) for j in range(8))
 
 
@@ -213,29 +220,130 @@ def tbtap(va, L, tbact_va):
     return c
 
 
-def rolldraw(va, L):
-    """Piano roll view draw (r0 view, r1 ctx): hide the mini grid and the pattern letter, then the stock draw."""
-    c = T.push_lo([0, 1, 4], lr=True)        # 16 B
-    for off, vt, idv in ((MINI_OFF, MINI_VT, None), (LETTER_OFF, BTN_VT, LETTER_ID)):
-        tag = "s%X" % off
+def rolldraw(va, L, fill=False):
+    """Piano roll view draw (r0 view, r1 ctx): hide the mini grid (and, without `fill`, the pattern letter); then
+    the stock draw. v053 (`fill`): the letter button is FILL; the top row is laid out without gaps (LAYOUT_KEYS while
+    the KEYS miniature is shown, else LAYOUT_4; SetRect only for a rect that differs; y, h kept; a slot whose id does
+    not match is left alone); FILL's selected look = the latched fill of the selected column."""
+    if not fill:
+        c = T.push_lo([0, 1, 4], lr=True)    # 16 B
+        for off, vt, idv in ((MINI_OFF, MINI_VT, None), (LETTER_OFF, BTN_VT, LETTER_ID)):
+            c = _hide(c, va, L, 0, off, vt, idv)
+        c += T.ldr_sp(0, 12)
+        c += T.mov_reg(14, 0)
+        c += T.pop_lo([0, 1, 4])
+        c += T.add_sp_imm(4)
+        c += T.bw(va + len(c), CONTAINER_DRAW)
+        return c
+    import trig as TR
+    c = T.push_lo([0, 1, 4, 5, 6, 7], lr=True)   # 28 B
+    c += T.sub_sp_imm(20)                    # 48 B frame; rect at sp+0..15
+    c += T.ldr_sp(5, 20)                     # r5 = view
+    c = _hide(c, va, L, 5, MINI_OFF, MINI_VT, None)
+    # r6 = 1 while the KEYS miniature is shown
+    c += T.movs_imm8(6, 0)
+    c += T.ldr_imm32(4, KEYMINI_OFF)
+    c += T.add_reg(4, 5)
+    c += T.ldr_imm(2, 4, 0x14)
+    c += T.movw(3, KEYMINI_ID)
+    c += T.cmp_reg(2, 3)
+    c += T.b_cond(va + len(c), "ne", L.get("k", va))
+    c += T.ldr_imm(2, 4, 0x30)
+    c += T.lsls_imm(2, 2, 24)                # hidden byte +0x30 (ldrb T1 reaches only +31)
+    c += T.b_cond(va + len(c), "ne", L.get("k", va))
+    c += T.movs_imm8(6, 1)
+    L["k"] = va + len(c)
+    slots = [(off, idv, LAYOUT_4[i], LAYOUT_KEYS[i]) for i, (off, idv) in enumerate(ROW_BTNS)]
+    slots.append((KEYMINI_OFF, KEYMINI_ID, None, LAYOUT_KEYS[4]))
+    for i, (off, idv, l4, lk) in enumerate(slots):
+        tag = "r%d" % i
         c += T.ldr_imm32(4, off)
-        c += T.add_reg(4, 0)
-        c += T.ldr_imm(2, 4, 0)
-        c += T.ldr_imm32(3, vt)
+        c += T.add_reg(4, 5)                 # r4 = button
+        c += T.ldr_imm(2, 4, 0x14)
+        c += T.movw(3, idv)
         c += T.cmp_reg(2, 3)
         c += T.b_cond(va + len(c), "ne", L.get(tag, va))
-        if idv is not None:
-            c += T.ldr_imm(2, 4, 0x14)
-            c += T.cmp_imm(2, idv)
-            c += T.b_cond(va + len(c), "ne", L.get(tag, va))
-        c += T.movs_imm8(2, 1)
-        c += T.adds_imm8(4, 0x30)
-        c += T.strb_imm(2, 4, 0)             # +0x30 hidden
-        c += T.strb_imm(2, 4, 1)             # +0x31
+        if l4 is None:                       # the miniature: only while it is shown
+            c += T.cmp_imm(6, 0)
+            c += T.b_cond(va + len(c), "eq", L.get(tag, va))
+            c += T.movw(0, lk[0])
+            c += T.movs_imm8(1, lk[1])
+        else:
+            c += T.movw(0, l4[0])
+            c += T.movs_imm8(1, l4[1])
+            c += T.cmp_imm(6, 0)
+            c += T.b_cond(va + len(c), "eq", L.get(tag + "g", va))
+            c += T.movw(0, lk[0])
+            c += T.movs_imm8(1, lk[1])
+            L[tag + "g"] = va + len(c)
+        c += T.ldr_imm(2, 4, 4)
+        c += T.cmp_reg(2, 0)
+        c += T.b_cond(va + len(c), "ne", L.get(tag + "s", va))
+        c += T.ldr_imm(2, 4, 0xC)
+        c += T.cmp_reg(2, 1)
+        c += T.b_cond(va + len(c), "eq", L.get(tag, va))
+        L[tag + "s"] = va + len(c)
+        c += T.str_sp(0, 0)
+        c += T.str_sp(1, 8)
+        c += T.ldr_imm(2, 4, 8)
+        c += T.str_sp(2, 4)
+        c += T.ldr_imm(2, 4, 0x10)
+        c += T.str_sp(2, 12)
+        c += T.mov_reg(0, 4)
+        c += T.add_rd_sp(1, 0)
+        c += T.ldr_imm(2, 4, 0)
+        c += T.ldr_imm(2, 2, SETRECT_SLOT)
+        c += T.blx(2)                        # the widget's own SetRect
         L[tag] = va + len(c)
-    c += T.ldr_sp(0, 12)
+    # FILL lit = latched fill of the selected column
+    c += T.ldr_imm32(4, LETTER_OFF)
+    c += T.add_reg(4, 5)
+    c += T.ldr_imm(2, 4, 0x14)
+    c += T.cmp_imm(2, LETTER_ID)
+    c += T.b_cond(va + len(c), "ne", L.get("fd", va))
+    c += T.ldr_imm32(0, P5.DESC_ARRAY_PTR)
+    c += T.ldr_imm(0, 0, 0)
+    c += T.cmp_imm(0, 0)
+    c += T.b_cond(va + len(c), "eq", L.get("fd", va))
+    c += T.ldr_imm32(1, LA.STATE_OFF)
+    c += T.add_reg(0, 1)
+    c += T.ldr_imm32(1, TC.SEL_OFF)
+    c += T.add_reg(1, 0)
+    c += T.ldrb_imm(2, 1, 0)                 # selected column
+    c += T.ldr_imm32(1, TR.LATCH_OFF)
+    c += T.add_reg(1, 0)
+    c += T.ldrb_imm(1, 1, 0)
+    c += T.lsrs_reg(1, 2)
+    c += T.movs_imm8(2, 1)
+    c += T.ands_reg(1, 2)                    # (LATCH >> column) & 1, 0 for column >= 8
+    c += T.mov_reg(0, 4)
+    c += T.bl(va + len(c), SETSEL)
+    L["fd"] = va + len(c)
+    c += T.add_sp_imm(20)
+    c += T.ldr_sp(0, 24)
     c += T.mov_reg(14, 0)
-    c += T.pop_lo([0, 1, 4])
+    c += T.pop_lo([0, 1, 4, 5, 6, 7])
     c += T.add_sp_imm(4)
     c += T.bw(va + len(c), CONTAINER_DRAW)
+    return c
+
+
+def _hide(c, va, L, rv, off, vt, idv):
+    """Hide the widget at view(rv)+off if its vtable (and id) match. Clobbers r2, r3, r4."""
+    tag = "s%X" % off
+    c += T.ldr_imm32(4, off)
+    c += T.add_reg(4, rv)
+    c += T.ldr_imm(2, 4, 0)
+    c += T.ldr_imm32(3, vt)
+    c += T.cmp_reg(2, 3)
+    c += T.b_cond(va + len(c), "ne", L.get(tag, va))
+    if idv is not None:
+        c += T.ldr_imm(2, 4, 0x14)
+        c += T.cmp_imm(2, idv)
+        c += T.b_cond(va + len(c), "ne", L.get(tag, va))
+    c += T.movs_imm8(2, 1)
+    c += T.adds_imm8(4, 0x30)
+    c += T.strb_imm(2, 4, 0)                 # +0x30 hidden
+    c += T.strb_imm(2, 4, 1)                 # +0x31
+    L[tag] = va + len(c)
     return c

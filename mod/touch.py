@@ -77,7 +77,7 @@ FR = 20                                      # 20 pushed + 20 = 40: [sp..+15] ms
 
 
 def trel(va, L, descs_va, dirty_va=None, table_va=None, selclip_va=None, menutap_va=None, colopen_va=None,
-         hsel_va=None):
+         hsel_va=None, hstop=False):
     fr = FR if menutap_va is None else FR + 8   # v038: [sp+20] = long press
     c = T.push_lo([4, 5, 6, 7], lr=True)
     c += T.sub_sp_imm(fr)
@@ -234,7 +234,10 @@ def trel(va, L, descs_va, dirty_va=None, table_va=None, selclip_va=None, menutap
                 L["hshort"] = va + len(c)
                 c += T.mov_reg(0, 5)
                 c += T.bl(va + len(c), hsel_va)
-                c += T.bw(va + len(c), L.get("out", va))
+                if hstop:                        # v056: ... and stops the column again (HSEL keeps r5, r7)
+                    c += T.bw(va + len(c), L.get("stop", va))
+                else:
+                    c += T.bw(va + len(c), L.get("out", va))
     L["stop"] = va + len(c)
     c += T.lsls_imm(0, 5, 8)
     c += T.ldr_imm32(3, LA.REQ_STOP)

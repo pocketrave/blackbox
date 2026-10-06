@@ -53,6 +53,7 @@ import colmenu as CM
 import colname as CN
 import hdrsel as HS
 import topbar as TBR
+import trig as TR
 
 LEGACY = os.environ.get("BB_LEGACY_CAVES") == "1"
 BANK1_END = 0x08100000                     # v039 (hardware): an image past flash bank 1 fails "Unable to verify"
@@ -92,7 +93,8 @@ PALETTE = 0x080F1D80
 # which now sits at 250..320).
 TITLE_SITE = 0x080AB73E                    # movs r3,#0x8c ; str.w r3,[r4,#0x140]
 TITLE_BACK = 0x080AB750                    # after the four rect stores
-TITLE_X, TITLE_W = 10, 240
+TITLE_X, TITLE_W = 10, 210                 # v056: 240 -> 210, ends before the counter box (222)
+COUNTER_ALIGN = 0x34 + 0x51                # v056: counter label (this+0x34) +0x51 alignment: 3 = right
 
 # Progress bar (this+0x194, class ctor 0x080BE758) is never added to the bar, so
 # it is never drawn. Its SetValue 0x080BE784 (called from the update fn
@@ -102,8 +104,8 @@ TITLE_X, TITLE_W = 10, 240
 # bars:beats counter (this+0x34) moves into its place: x 10 -> 250, w 100 -> 70.
 STATUSBAR_PATCHES = [
     (0x080AB776, T.bl(0x080AB776, 0x080AEC44), bytes.fromhex("00bf00bf")),  # bl AddChild(pbar) -> nop nop
-    (0x080AB6EA, bytes.fromhex("0a23"), bytes.fromhex("fa23")),          # counter x = 250
-    (0x080AB6F2, bytes.fromhex("6423"), bytes.fromhex("4623")),          # counter w = 70
+    (0x080AB6EA, bytes.fromhex("0a23"), bytes.fromhex("de23")),          # counter x = 222 (v056; v013: 250)
+    (0x080AB6F2, bytes.fromhex("6423"), bytes.fromhex("6023")),          # counter w = 96 = 8 chars, right-aligned (v056; was 70)
 ]
 # ---- Startup view: SEQS instead of PADS ----------------------------------------
 # View mode byte = [0x24020088+0x8CA4]; SetView 0x0809EAEC(this, mode, 0, 0).
@@ -190,6 +192,23 @@ def build():
     p.expect(SY.PP_SITE, SY.PP_ORIG)
     p.expect(SPL.POOL_VER, struct.pack("<I", SPL.ORIG_VER))
     p.expect(SS.H2_SITE, SS.H2_ORIG)
+    p.expect(TR.SETSTEP, TR.SETSTEP_ORIG)                                       # v053
+    p.expect(TR.GATE, TR.GATE_ORIG)
+    p.expect(TR.REG_COUNT_SITE, TR.REG_COUNT_ORIG)
+    p.expect(TR.LOAD_SITE, TR.LOAD_ORIG)
+    p.expect(TR.EDIT_SITE, TR.EDIT_ORIG)
+    p.expect(TR.TABLE_POOL, struct.pack("<I", TR.TABLE_STOCK))
+    p.expect(TR.DISP_SITE, TR.DISP_ORIG)
+    p.expect(TR.NOFF_SITE, TR.NOFF_ORIG)
+    for s_ in TR.TXT_SITES + (TR.CTOR_TXT_SITE,):
+        if bytes(p.data[s_ - BASE:s_ - BASE + 4]) != T.bl(s_, TBR.SETTEXT):
+            raise PatchError("letter SetText site %08X changed" % s_)
+    p.expect(TR.LETTER_REL_SITE, TR.LETTER_REL_ORIG)
+    p.expect(TR.MD1_SITE, TR.MD1_ORIG)
+    p.expect(TR.MD2_SITE, TR.MD2_ORIG)
+    p.expect(CN.INFO_SITE, CN.INFO_ORIG)                                        # v056
+    for s_, o_ in ((TR.NCA_SITE, TR.NCA_ORIG), (TR.NCB_SITE, TR.NCB_ORIG), (TR.NCC_SITE, TR.NCC_ORIG)):
+        p.expect(s_, o_)
     p.expect(SS.POOL_SITE, SS.POOL_ORIG)
     p.expect(SS.L_SITE, SS.L_ORIG)
     for s_, o_ in ((SS.RF_TOP_SITE, SS.RF_TOP_ORIG), (SS.RF_RESET_SITE, SS.RF_RESET_ORIG),
@@ -254,6 +273,8 @@ def build():
         c += T.movs_imm8(3, TITLE_W)
         c += ST_W                            # str.w r3, [r4, #0x148]
         c += ST_H                            # str.w r5, [r4, #0x14c]  (h, stock)
+        c += T.movs_imm8(3, 3)
+        c += T.strb_w(3, 4, COUNTER_ALIGN)   # v056: the counter grows to the left as digits are added
         c += T.bw(va + len(c), TITLE_BACK)
         return c
     va_title = emit(title_rect)
@@ -364,9 +385,10 @@ def build():
     va_pvinv = emit(PV.pvinv)                                                    # v042: no conversion here
     va_uplw = emit(lambda v, L: MG.uplw(v, L, va_migr))                           # v042: convert before uploads
     # v043 MIDI notes 111-118 = a tap on column 1-8 in the selected row
-    va_midib = emit(lambda v, L: MI.midib(v, L, va_b))
+    va_midib = emit(lambda v, L: MI.midib(v, L, va_b, fill_lo=TR.FILL_LO))      # v055 fill notes 119-126
     va_tap = emit(lambda v, L: MI.tap(v, L, l3map_va, va_colstate, va_selclip, va_dirty))
     va_mcons = emit(lambda v, L: MI.mcons(v, L, va_tap, lastrow=True))            # v047: header -> last clip row
+    va_fsync = emit(lambda v, L: TR.fillsync(v, L, va_mcons, va_dirty))          # v053: fill masks, BACK release
     va_c3m = emit_legacy(lambda v, L: MI.c3m(v, L, va_c, va_mcons, va_launch5))
     va_pvbuild = emit(lambda v, L: PV.pvbuild(v, L, l3map_va, qtable_va))
     va_pvtile = emit(lambda v, L: PV.pvtile(v, L, va_pvbuild))
@@ -382,7 +404,7 @@ def build():
     va_nameret = emit(lambda v, L: CN.nameret(v, L, va_sh2, va_namefill))
     va_colopen = emit(lambda v, L: CM.colopen(v, L, l3desc_va, va_nameprep))
     va_colret = emit(lambda v, L: CM.colret(v, L, va_selclip, clear_kbd=True))
-    va_c3n = emit(lambda v, L: CM.c3n(v, L, va_c, va_colret, va_mcons, va_launch5))
+    va_c3n = emit(lambda v, L: CM.c3n(v, L, va_c, va_colret, va_fsync, va_launch5))   # v053: FILLSYNC, then MCONS
     va_trel5 = emit_legacy(lambda v, L: TC.trel(v, L, l3desc_va, va_dirty, l3map_va, selclip_va=va_selclip,
                                          menutap_va=va_mtap, colopen_va=va_colopen))
     # v047 selectable header row
@@ -391,16 +413,42 @@ def build():
     va_infow = emit(lambda v, L: HS.infow(v, L, va_colopen))
     va_enc4 = emit(lambda v, L: TC.enc(v, L, va_dirty, selclip_va=va_selclip, header=True))
     va_trel6 = emit(lambda v, L: TC.trel(v, L, l3desc_va, va_dirty, l3map_va, selclip_va=va_selclip,
-                                         menutap_va=va_mtap, colopen_va=va_colopen, hsel_va=va_hsel))
+                                         menutap_va=va_mtap, colopen_va=va_colopen, hsel_va=va_hsel,
+                                         hstop=True))   # v056: header tap stops the column again
     # v049 settings-page 1-8 selector, piano roll without the mini grid / letter
     nums_va = p.append(TBR.NUMS, align=4)
     va_topbar = emit(lambda v, L: TBR.topbar(v, L, nums_va))
     va_tbact = emit(lambda v, L: TBR.tbact(v, L, va_colopen, va_selclip))
     va_tbtap = emit(lambda v, L: TBR.tbtap(v, L, va_tbact))
-    va_rolldraw = emit(TBR.rolldraw)
+    va_rolldraw = emit(lambda v, L: TBR.rolldraw(v, L, fill=True))                 # v053 one-row toolbar + FILL
     va_rowmk = emit(PT.rowmark)                                                   # v043: MIDI row corners
+    va_filltile = emit(lambda v, L: TR.filltile(v, L, l3map_va))                   # v055 fill tile rule
     va_paint4 = emit(lambda v, L: PT.paint(v, L, va_colstate, l3map_va, digits_va, va_rtick, menudraw_va=va_mdraw,
-                                           pvtile_va=va_pvtile, rowmark_va=va_rowmk, hdrcol_va=va_hdrcol))
+                                           pvtile_va=va_pvtile, rowmark_va=va_rowmk, hdrcol_va=va_hdrcol,
+                                           filltile_va=va_filltile))
+    # ---- v053: trig conditions
+    ab_va = p.append(TR.ab_table(), align=4)
+    va_cnt = emit(TR.cnt)
+    va_cond = emit(lambda v, L: TR.cond(v, L, ab_va))
+    lab_vas = [p.append(s_.encode() + b"\0", align=2) for s_ in TR.LABELS]
+    _pct, _pct_offs = TR.pct_strings()                                             # v057: own 1%..99% texts
+    pct_va = p.append(_pct, align=4)
+    evtab_va = p.append(TR.ui_table(_stock, lab_vas, {n: pct_va + o for n, o in _pct_offs.items()}), align=4)
+    va_cntset = emit(TR.cntset)
+    va_s2u = emit(TR.s2u)
+    va_u2s = emit(TR.u2s)
+    va_bkd = emit(TR.bkd)
+    va_noff = emit(TR.noff)
+    fill_str_va = p.append(TR.FILL_STR, align=4)
+    va_filltxt = emit(lambda v, L: TR.filltxt(v, L, fill_str_va))
+    va_fillctor = emit(lambda v, L: TR.fillctor(v, L, fill_str_va))
+    va_toggle = emit(TR.toggle)
+    va_md1 = emit(TR.md1)                                                          # v054 multi-note PLAY edit
+    va_md2 = emit(TR.md2)
+    va_nca = emit(lambda v, L: TR.nc_cache(v, L, 7))                              # v055 note colour
+    va_ncb = emit(lambda v, L: TR.nc_cache(v, L, 6))
+    va_ncc = emit(TR.nc_colour)
+    va_infn = emit(CN.infn)                                                        # v056 INFO on the Name row
 
     # ---- install ------------------------------------------------------------
     p.write_bytes(S1_DETOUR_DESC, T.bw(S1_DETOUR_DESC, va_desc) + T.nop(), expected=desc_orig)
@@ -476,13 +524,30 @@ def build():
         assert 0 <= i < 34
         p.write_bytes(PALETTE + 4 * i, struct.pack("<I", new), expected=struct.pack("<I", stock))
 
+    p.write_bytes(TR.SETSTEP, T.bw(TR.SETSTEP, va_cnt), expected=TR.SETSTEP_ORIG)          # v053 loop count
+    p.write_bytes(TR.GATE, T.bw(TR.GATE, va_cond) + T.nop(), expected=TR.GATE_ORIG)       # v053 condition gate
+    p.write_bytes(TR.TABLE_POOL, struct.pack("<I", evtab_va), expected=struct.pack("<I", TR.TABLE_STOCK))   # v053 list
+    p.write_bytes(TR.REG_COUNT_SITE, T.bl(TR.REG_COUNT_SITE, va_cntset), expected=TR.REG_COUNT_ORIG)
+    p.write_bytes(TR.LOAD_SITE, T.bw(TR.LOAD_SITE, va_s2u) + T.nop(), expected=TR.LOAD_ORIG)
+    p.write_bytes(TR.EDIT_SITE, T.bw(TR.EDIT_SITE, va_u2s), expected=TR.EDIT_ORIG)
+    p.write_bytes(TR.DISP_SITE, T.bw(TR.DISP_SITE, va_bkd) + T.nop(), expected=TR.DISP_ORIG)   # v053 BACK = fill
+    p.write_bytes(TR.NOFF_SITE, T.bw(TR.NOFF_SITE, va_noff), expected=TR.NOFF_ORIG)           # v053 note 119 off
+    for s_ in TR.TXT_SITES:                                                      # v053 letter -> FILL
+        p.write_bytes(s_, T.bl(s_, va_filltxt), expected=T.bl(s_, TBR.SETTEXT))
+    p.write_bytes(TR.CTOR_TXT_SITE, T.bl(TR.CTOR_TXT_SITE, va_fillctor), expected=T.bl(TR.CTOR_TXT_SITE, TBR.SETTEXT))
+    p.write_bytes(TR.LETTER_REL_SITE, T.b_cond_w(TR.LETTER_REL_SITE, "eq", va_toggle), expected=TR.LETTER_REL_ORIG)
+    p.write_bytes(TR.MD1_SITE, T.bw(TR.MD1_SITE, va_md1), expected=TR.MD1_ORIG)          # v054
+    p.write_bytes(TR.MD2_SITE, T.bw(TR.MD2_SITE, va_md2), expected=TR.MD2_ORIG)
+    for s_, o_, v_ in ((TR.NCA_SITE, TR.NCA_ORIG, va_nca), (TR.NCB_SITE, TR.NCB_ORIG, va_ncb), (TR.NCC_SITE, TR.NCC_ORIG, va_ncc)):
+        p.write_bytes(s_, T.bl(s_, v_), expected=o_)                                # v055 note colour
+    p.write_bytes(CN.INFO_SITE, T.bw(CN.INFO_SITE, va_infn) + T.nop() * 2, expected=CN.INFO_ORIG)   # v056
     p.verify_safety()
     out = os.path.join(OUTDIR, "BLACKBOX_all.bin")
     p.save(out)
     size = os.path.getsize(out)
     assert size <= BANK1_END - BASE, ("image is %d B, ends at 0x%08X: past flash bank 1 (0x%08X); the bootloader "
                                       "refuses it (v039)" % (size, BASE + size, BANK1_END))
-    return p, out, dict(desc=va_desc, owner=va_owner, A=va_a, B=va_b, C=va_c, N=va_name, T=va_title, TC=va_tcol, H1=va_h[0], H2=va_h[1], X=va_x, ACTV=va_actv, H3=va_h3, H4=va_h4, H5=va_h5, H6=va_h6, H7A=va_h7a, H7B=va_h7b, H7C=va_h7c, SCROLL=va_scroll, LSKIP=va_l, T0R=va_t0r, T0G=va_t0g, RD2=va_rd2, SH=va_sh, NB=va_nb, KNOB=va_knob, W1=va_w1, W2=va_w2, RO=va_ro, SH2=va_sh2, G1=va_g1, G2=va_g2, B2=va_b2, PROBE=va_probe, C2=va_c2, LAUNCH=va_launch5, C3=va_c3n, C3_OLD=va_c3e, C3M=va_c3m, COLOPEN=va_colopen, NAMEPREP=va_nameprep, NAMEFILL=va_namefill, EDITW=va_editw, NAMERET=va_nameret, COLRET=va_colret, ROWSEL=va_rowsel, PISEL=va_pisel, MIDIB=va_midib, ROWMK=va_rowmk, CPW=va_cpw, MCONS=va_mcons, TAP=va_tap, QTABLE=qtable_va, L3MAP=l3map_va, L3HOSTS=l3hosts_va, COLSTATE=va_colstate, PAINT=va_paint4, PVINV=va_pvinv, MIGR=va_migr, UPLW=va_uplw, PVBUILD=va_pvbuild, PVTILE=va_pvtile, TPRESS=va_tpress, TREL=va_trel6, TREL5=va_trel5, HSEL=va_hsel, TOPBAR=va_topbar, TBACT=va_tbact, TBTAP=va_tbtap, ROLLDRAW=va_rolldraw, HDRCOL=va_hdrcol, INFOW=va_infow, TREL4=va_trel4, MPOS=va_mpos, MDRAW=va_mdraw, MCLEAR=va_mclear, MTAP=va_mtap, ENC=va_enc4, FINDP=va_findp, STREAM=va_stream, ECHO=va_echo, SPSTOCK=va_spstock, SYNC=va_sync, SELCLIP=va_selclip, ADDTR=va_addtr, CLRTR=va_clrtr, ADDW=va_addw, CLRW=va_clrw, POSW=va_posw, STATEW=va_statew, POS2W=va_pos2w, PPTR=va_pptr, PARAMW=va_paramw2, RESTREAM=va_restream, DIRTY=va_dirty, RTICK=va_rtick, table=table_va)
+    return p, out, dict(desc=va_desc, owner=va_owner, A=va_a, B=va_b, C=va_c, N=va_name, T=va_title, TC=va_tcol, H1=va_h[0], H2=va_h[1], X=va_x, ACTV=va_actv, H3=va_h3, H4=va_h4, H5=va_h5, H6=va_h6, H7A=va_h7a, H7B=va_h7b, H7C=va_h7c, SCROLL=va_scroll, LSKIP=va_l, T0R=va_t0r, T0G=va_t0g, RD2=va_rd2, SH=va_sh, NB=va_nb, KNOB=va_knob, W1=va_w1, W2=va_w2, RO=va_ro, SH2=va_sh2, G1=va_g1, G2=va_g2, B2=va_b2, PROBE=va_probe, C2=va_c2, LAUNCH=va_launch5, C3=va_c3n, C3_OLD=va_c3e, C3M=va_c3m, COLOPEN=va_colopen, NAMEPREP=va_nameprep, NAMEFILL=va_namefill, EDITW=va_editw, NAMERET=va_nameret, COLRET=va_colret, ROWSEL=va_rowsel, PISEL=va_pisel, MIDIB=va_midib, ROWMK=va_rowmk, CPW=va_cpw, MCONS=va_mcons, TAP=va_tap, QTABLE=qtable_va, L3MAP=l3map_va, L3HOSTS=l3hosts_va, COLSTATE=va_colstate, PAINT=va_paint4, PVINV=va_pvinv, MIGR=va_migr, UPLW=va_uplw, PVBUILD=va_pvbuild, PVTILE=va_pvtile, TPRESS=va_tpress, TREL=va_trel6, TREL5=va_trel5, HSEL=va_hsel, TOPBAR=va_topbar, TBACT=va_tbact, TBTAP=va_tbtap, ROLLDRAW=va_rolldraw, HDRCOL=va_hdrcol, INFOW=va_infow, TREL4=va_trel4, MPOS=va_mpos, MDRAW=va_mdraw, MCLEAR=va_mclear, MTAP=va_mtap, ENC=va_enc4, FINDP=va_findp, STREAM=va_stream, ECHO=va_echo, SPSTOCK=va_spstock, SYNC=va_sync, SELCLIP=va_selclip, ADDTR=va_addtr, CLRTR=va_clrtr, ADDW=va_addw, CLRW=va_clrw, POSW=va_posw, STATEW=va_statew, POS2W=va_pos2w, PPTR=va_pptr, PARAMW=va_paramw2, RESTREAM=va_restream, DIRTY=va_dirty, RTICK=va_rtick, CNT=va_cnt, COND=va_cond, ABTAB=ab_va, CNTSET=va_cntset, S2U=va_s2u, U2S=va_u2s, EVTAB=evtab_va, BKD=va_bkd, FSYNC=va_fsync, NOFF=va_noff, TOGGLE=va_toggle, FILLTXT=va_filltxt, FILLCTOR=va_fillctor, MD1=va_md1, MD2=va_md2, FILLTILE=va_filltile, NCA=va_nca, NCB=va_ncb, NCC=va_ncc, INFN=va_infn, table=table_va)
 
 
 def main():

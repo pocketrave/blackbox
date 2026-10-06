@@ -210,3 +210,71 @@ def nameret(va, L, sh2_va, namefill_va):
     c += T.add_sp_imm(4)
     c += T.bw(va + len(c), sh2_va)
     return c
+
+
+# ---- v056: INFO on the column page's Name row opens the keyboard, as a BR turn does. The button dispatcher's INFO
+# branch (mode switch at 0x080A2F52) gets INFN: on the column page (mode 0x1E, colpage set) with the current row's id
+# == NAME_ID it calls the page handler with a 0x3C row-changed message, so EDITW runs exactly as for a knob edit; then
+# the stock mode-0x1E INFO tail (wake, exit). Everything else runs the displaced instructions.
+INFO_SITE, INFO_ORIG = 0x080A2F52, bytes.fromhex("00f5004393f8a43c")   # add.w r3,r0,#0x8000; ldrb.w r3,[r3,#0xca4]
+INFO_BACK, INFO_TAIL = 0x080A2F5A, 0x080A2FA4
+PAGE_HANDLER = 0x080A7468                   # param page handler (page, msg*)
+PAGE_OFF = 0x2A040                          # param page = [ROOT_PTR] + 0x2A040
+CUR_OFF = 0xA2B4                            # page: current row (u32); row count at CUR_OFF - 4
+ROWID_OFF, ROW_STRIDE = 0xB7C, 0x328        # page: row i's value widget id = [page + 0xB7C + i * 0x328]
+MODE_PARAM = 0x1E
+
+
+def infn(va, L):
+    """b.w from INFO_SITE (r0 = r4 = session; r1-r3, r5 free; the dispatcher frame at sp is scratch)."""
+    c = T.ldr_imm32(3, LA.SESSION + 0x8CA4)
+    c += T.ldrb_imm(3, 3, 0)
+    c += T.cmp_imm(3, MODE_PARAM)
+    c += T.b_cond(va + len(c), "ne", L.get("stock", va))
+    c += T.ldr_imm32(3, P5.DESC_ARRAY_PTR)
+    c += T.ldr_imm(3, 3, 0)
+    c += T.cmp_imm(3, 0)
+    c += T.b_cond(va + len(c), "eq", L.get("stock", va))
+    c += T.ldr_imm32(2, LA.STATE_OFF + 106)      # colmenu.COLPAGE_OFF: k + 1 on the column page
+    c += T.add_reg(3, 2)
+    c += T.ldrb_imm(3, 3, 0)
+    c += T.cmp_imm(3, 0)
+    c += T.b_cond(va + len(c), "eq", L.get("stock", va))
+    c += T.ldr_imm32(5, ROOT_PTR)
+    c += T.ldr_imm(5, 5, 0)
+    c += T.cmp_imm(5, 0)
+    c += T.b_cond(va + len(c), "eq", L.get("stock", va))
+    c += T.ldr_imm32(2, PAGE_OFF)
+    c += T.add_reg(5, 2)                         # r5 = page
+    c += T.ldr_imm32(3, CUR_OFF)
+    c += T.add_reg(3, 5)
+    c += T.ldr_imm(2, 3, 0)                      # r2 = current row
+    c += T.subs_imm8(3, 4)
+    c += T.ldr_imm(3, 3, 0)                      # r3 = row count
+    c += T.cmp_reg(2, 3)
+    c += T.b_cond(va + len(c), "cs", L.get("stock", va))
+    c += T.movw(3, ROW_STRIDE)
+    c += T.muls(3, 2)
+    c += T.adds_reg(3, 3, 5)
+    c += T.ldr_imm32(2, ROWID_OFF)
+    c += T.add_reg(3, 2)
+    c += T.ldr_imm(3, 3, 0)                      # the row's param id
+    c += T.ldr_imm32(2, NAME_ID)
+    c += T.cmp_reg(3, 2)
+    c += T.b_cond(va + len(c), "ne", L.get("stock", va))
+    c += T.movs_imm8(2, 0x3C)                    # msg {u16 0x3C, vt, 0, 0, id, 0} in the dispatcher frame
+    c += T.str_sp(2, 0)
+    c += T.ldr_imm32(2, MSG_VT)
+    c += T.str_sp(2, 4)
+    c += T.movs_imm8(2, 0)
+    for off in (8, 0xC, 0x14):
+        c += T.str_sp(2, off)
+    c += T.str_sp(3, 0x10)
+    c += T.mov_reg(0, 5)
+    c += T.add_rd_sp(1, 0)
+    c += T.bl(va + len(c), PAGE_HANDLER)
+    c += T.bw(va + len(c), INFO_TAIL)            # stock mode-0x1E INFO: wake, exit (r4 = session)
+    L["stock"] = va + len(c)
+    c += INFO_ORIG
+    c += T.bw(va + len(c), INFO_BACK)
+    return c

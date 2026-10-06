@@ -16,11 +16,21 @@ your own risk; modified firmware may affect your warranty. It has been tested on
 - PrCh Quant setting in TOOLS > Clock, kept across power cycles.
 - Colour-blind-safe palette.
 - 12x16 Spleen font for the large text.
+- Elektron-style trig conditions in the piano roll's Event mode (PLAY knob): 1:2 ... 8:8, 1ST / -1ST, PRE / -PRE,
+  FILL / -FILL, next to the stock chances. Loops count from the clip launch; one-step clips play conditions always.
+  Notes with a condition or chance are drawn green.
+- FILL: hold BACK on SEQS (selected clip), MIDI notes 119-126 (columns 1-8 of the selected row), or the FILL toggle in
+  the piano roll. A clip with FILL notes turns orange-red while fill is on.
+- Piano roll top row: MIDI, Edit, Event, FILL (+ the pad miniature in KEYS mode).
+- SEQS: thin clip separators, scroll arrows, a tap on a column header stops it; INFO on a column's Name row renames it.
+- The bars:beats counter in the header is right-aligned and grows to the left.
 - Splash shows `3.1.9(NN)`, the mod release number.
 
 ### Known issues
 
-None recorded for release v052.
+- Fill state is not saved; it is off after boot.
+- A MIDI note-off 119-126 on any channel clears that column's fill.
+- On stock firmware, notes with a trig condition play always.
 
 ## Install
 
@@ -39,11 +49,11 @@ Put the stock image at `firmware/BLACKBOX-3.1.9.bin` (see `firmware/README.md`),
 
 ```
 pip install -r requirements.txt
-python mod/build.py 52
+python mod/build.py 57
 ```
 
-The result is byte-identical to release v052: check `out/BLACKBOX.bin` against `output_sha256` in
-`docs/patches/v052.json`. Tests: `python -m pytest tests -q` and `node --test tests/js/patcher.test.mjs`.
+The result is byte-identical to release v057: check `out/BLACKBOX.bin` against `output_sha256` in
+`docs/patches/v057.json`. Tests: `python -m pytest tests -q` and `node --test tests/js/patcher.test.mjs`.
 
 ## How it works
 
