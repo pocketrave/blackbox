@@ -3,7 +3,7 @@
 An unofficial mod for the **original** 1010music Blackbox, applied on top of stock firmware **3.1.9**. It is not
 affiliated with, endorsed by, or supported by 1010music. "1010music" and "Blackbox" are trademarks of 1010music LLC.
 This repository does not contain or distribute 1010music's firmware; the mod only modifies the copy you supply. Use at
-your own risk; modified firmware may affect your warranty. It has been tested on one unit. Project page: <https://pocketrave.live/projects/blackbox>.
+your own risk; modified firmware may affect your warranty. It has been tested on one unit. Project page: <https://pocketrave.live/#/projects/blackbox>.
 
 ## What it adds
 
