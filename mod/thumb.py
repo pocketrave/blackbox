@@ -150,6 +150,10 @@ def selftest(verbose=True):
         (add_rd_sp(1, 0x20), "add r1, sp, #0x20"),
         (negs(1, 1), "rsbs r1, r1, #0"),
         (bx(14), "bx lr"),
+        (sxth(6, 6), "sxth r6, r6"),
+        (ldrex(3, 6), "ldrex r3, [r6]"),
+        (strex(0, 1, 6), "strex r0, r1, [r6]"),
+        (ldrh_w(2, 4, 0xE50), "ldrh.w r2, [r4, #0xe50]"),
     ]
     ok = True
     for code, expect in cases:
@@ -490,3 +494,40 @@ if __name__ == "__main__":
     print("thumb.py selftest")
     selftest()
     print("all encoders verified against Capstone")
+
+
+# ---------------------------------------------------------------- added for v059
+def ldrexb(rt, rn):
+    """LDREXB T1 - rt = [rn] (byte), opens the exclusive monitor."""
+    return struct.pack("<HH", 0xE8D0 | rn, (rt << 12) | 0xF4F)
+
+
+def strexb(rd, rt, rn):
+    """STREXB T1 - [rn] = rt (byte) if the monitor is still open; rd = 0 on success, 1 on failure."""
+    return struct.pack("<HH", 0xE8C0 | rn, (rt << 12) | 0xF40 | rd)
+
+
+# ---------------------------------------------------------------- added for v060
+def sxth(rd, rm):
+    """SXTH T1 - rd = sign-extended halfword of rm, low registers."""
+    if rd > 7 or rm > 7:
+        raise ValueError("sxth needs low registers")
+    return struct.pack("<H", 0xB200 | (rm << 3) | rd)
+
+
+# ---------------------------------------------------------------- added for v063
+def ldrex(rt, rn):
+    """LDREX T1 - rt = [rn] (word), opens the exclusive monitor."""
+    return struct.pack("<HH", 0xE850 | rn, (rt << 12) | 0xF00)
+
+
+def strex(rd, rt, rn):
+    """STREX T1 - [rn] = rt (word) if the monitor is still open; rd = 0 on success, 1 on failure."""
+    return struct.pack("<HH", 0xE840 | rn, (rt << 12) | (rd << 8))
+
+
+def ldrh_w(rt, rn, imm12):
+    """LDRH.W T2 - rt = halfword [rn + imm12], imm12 0..4095."""
+    if not 0 <= imm12 < 4096:
+        raise ValueError("ldrh.w offset")
+    return struct.pack("<HH", 0xF8B0 | rn, (rt << 12) | imm12)

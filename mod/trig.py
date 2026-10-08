@@ -278,7 +278,7 @@ def fillsync(va, L, mcons_va, dirty_va):
     return c
 
 
-C_FILL = 12                                              # vermillion #D55E00 (palette 12)
+C_FILL = 11                                              # v058: bluish green #009E73 = C_COND (v053-v057: vermillion 12)
 GETEVENT = 0x08063D08                                    # (container, i, out*) -> 0 past the end
 FILL_V = COND0 + NAB + 4                                 # stored FILL (121); -FILL = 122
 

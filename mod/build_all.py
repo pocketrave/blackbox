@@ -54,6 +54,9 @@ import colname as CN
 import hdrsel as HS
 import topbar as TBR
 import trig as TR
+import steplen as SL
+import fxpage as FXP
+import modcc as MC
 
 LEGACY = os.environ.get("BB_LEGACY_CAVES") == "1"
 BANK1_END = 0x08100000                     # v039 (hardware): an image past flash bank 1 fails "Unable to verify"
@@ -93,7 +96,8 @@ PALETTE = 0x080F1D80
 # which now sits at 250..320).
 TITLE_SITE = 0x080AB73E                    # movs r3,#0x8c ; str.w r3,[r4,#0x140]
 TITLE_BACK = 0x080AB750                    # after the four rect stores
-TITLE_X, TITLE_W = 10, 210                 # v056: 240 -> 210, ends before the counter box (222)
+TITLE_X, TITLE_W = 3, 217                  # v058: x 3 = the counter's 5-px right margin (glyph bearing 2); ends at 220
+                                           # (v056: 10, 210 - before the counter box at 222)
 COUNTER_ALIGN = 0x34 + 0x51                # v056: counter label (this+0x34) +0x51 alignment: 3 = right
 
 # Progress bar (this+0x194, class ctor 0x080BE758) is never added to the bar, so
@@ -244,6 +248,9 @@ def build():
         c += T.movw(1, NEW_ID)
         c += T.mov_reg(0, 8)
         c += T.bl(va + len(c), REGISTER_ENUM_PARAM)
+        c += T.bl(va + len(c), va_slfix)     # v058
+        c += T.bl(va + len(c), va_labinit)   # v060
+        c += T.bl(va + len(c), va_moddesc)   # v063
         c += desc_orig                       # add sp,#0x14 ; pop.w {...,pc}
         return c
 
@@ -258,6 +265,34 @@ def build():
         c += T.bw(va + len(c), S1_DETOUR_OWNER + 4)
         return c
 
+    # ---- v058: Step Len / Quant Size down to 1/128 (labels and the descriptor fix, called from s1_desc)
+    _sl_blob, _sl_offs = SL.strings()
+    sl_str_va = p.append(_sl_blob, align=4)
+    sl_tab_va = p.append(SL.table(sl_str_va, _sl_offs), align=4)
+    va_slfix = emit(lambda v, L: SL.descfix(v, L, sl_tab_va))
+    _fx_blob, _fx_offs = FXP.strings()
+    fx_str_va = p.append(_fx_blob, align=4)
+    va_labinit = emit(lambda v, L: FXP.labinit(v, L, fx_str_va, _fx_offs))
+    va_fxlay = emit(FXP.fxlay)                                                    # v060 FX send page
+    va_fxlayc = emit(lambda v, L: FXP.fxlay_ctor(v, L, va_fxlay))
+    va_fxmark = emit(FXP.fxmark)
+    va_fxapply = emit(lambda v, L: FXP.fxapply(v, L, va_fxmark))
+    va_fxs13 = emit(lambda v, L: FXP.fxs13(v, L, va_fxmark, va_fxapply, va_fxlay))
+    va_fxs12 = emit(lambda v, L: FXP.fxs12(v, L, va_fxmark))
+    va_fxdraw = emit(FXP.fxdraw)
+    va_fxinfo = emit(lambda v, L: FXP.fxinfo(v, L, fx_str_va, _fx_offs))
+    va_fxback = emit(FXP.fxback)
+    va_svhook = emit(FXP.svhook)
+    va_fxrows = emit(FXP.fxrows)
+    va_fxtabs = emit(FXP.fxtabs)
+    mc_tab_va = p.append(MC.table(), align=4)                                     # v063 CC -> sends
+    mc_tmpl_va = p.append(MC.desc_blob(mc_tab_va), align=4)
+    va_moddesc = emit(lambda v, L: MC.moddesc(v, L, mc_tmpl_va))
+    va_modbuild = emit(MC.modbuild)
+    va_modedit = emit(MC.modedit)
+    va_learnen = emit(MC.learnen)
+    va_ccin = emit(MC.ccin)
+    va_ccapply = emit(MC.ccapply)
     va_desc = emit(s1_desc)
     va_owner = emit(s1_owner)
     va_a = emit(P5.cave_a)
@@ -404,7 +439,8 @@ def build():
     va_nameret = emit(lambda v, L: CN.nameret(v, L, va_sh2, va_namefill))
     va_colopen = emit(lambda v, L: CM.colopen(v, L, l3desc_va, va_nameprep))
     va_colret = emit(lambda v, L: CM.colret(v, L, va_selclip, clear_kbd=True))
-    va_c3n = emit(lambda v, L: CM.c3n(v, L, va_c, va_colret, va_fsync, va_launch5))   # v053: FILLSYNC, then MCONS
+    va_fxmodcc = emit(lambda v, L: MC.fxmodcc(v, L, va_ccapply, va_fsync))       # v063: CC -> pad FX sends
+    va_c3n = emit(lambda v, L: CM.c3n(v, L, va_c, va_colret, va_fxmodcc, va_launch5))   # v063: FXMODCC, FILLSYNC, MCONS
     va_trel5 = emit_legacy(lambda v, L: TC.trel(v, L, l3desc_va, va_dirty, l3map_va, selclip_va=va_selclip,
                                          menutap_va=va_mtap, colopen_va=va_colopen))
     # v047 selectable header row
@@ -524,6 +560,27 @@ def build():
         assert 0 <= i < 34
         p.write_bytes(PALETTE + 4 * i, struct.pack("<I", new), expected=struct.pack("<I", stock))
 
+    for va_, o_, n_ in FXP.CYCLE_SITES:                                                  # v060 FX order
+        p.write_bytes(va_, n_, expected=o_)
+    p.write_bytes(FXP.CTOR_SITE, T.bl(FXP.CTOR_SITE, va_fxlayc), expected=FXP.CTOR_ORIG)     # v060 layout
+    for va_, o_ in zip(FXP.TRI_SITES, FXP.TRI_ORIG):
+        p.write_bytes(va_, T.nop() * 2, expected=o_)
+    p.write_bytes(FXP.VT_SLOT13, struct.pack("<I", va_fxs13 | 1), expected=struct.pack("<I", FXP.VT13_ORIG))
+    p.write_bytes(FXP.VT_SLOT12, struct.pack("<I", va_fxs12 | 1), expected=struct.pack("<I", FXP.VT12_ORIG))
+    p.write_bytes(FXP.VT_SLOT1, struct.pack("<I", va_fxdraw | 1), expected=struct.pack("<I", FXP.VT1_ORIG))
+    p.write_bytes(FXP.INFO_SITE, T.bl(FXP.INFO_SITE, va_fxinfo), expected=FXP.INFO_ORIG)
+    p.write_bytes(FXP.BACK_SITE, T.bw(FXP.BACK_SITE, va_fxback) + T.nop() * 2, expected=FXP.BACK_ORIG)
+    p.write_bytes(FXP.SV_SITE, T.bw(FXP.SV_SITE, va_svhook) + T.nop(), expected=FXP.SV_ORIG)
+    p.write_bytes(FXP.ROWS_SITE, T.bl(FXP.ROWS_SITE, va_fxrows), expected=FXP.ROWS_ORIG)        # v062 FX pad page
+    for va_, o_ in zip(FXP.TABS_SITES, FXP.TABS_ORIG):
+        p.write_bytes(va_, T.bl(va_, va_fxtabs), expected=o_)
+    p.write_bytes(FXP.MODTAB_SITE, FXP.CONF_ADD, expected=FXP.MODTAB_ORIG)
+    p.write_bytes(MC.CC_SITE, T.bw(MC.CC_SITE, va_ccin), expected=MC.CC_ORIG)                 # v063
+    p.write_bytes(MC.BUILD_SITE, T.bw(MC.BUILD_SITE, va_modbuild), expected=MC.BUILD_ORIG)
+    p.write_bytes(MC.EDIT_SITE, T.bw(MC.EDIT_SITE, va_modedit), expected=MC.EDIT_ORIG)
+    p.write_bytes(MC.LEARN_SITE, T.bw(MC.LEARN_SITE, va_learnen), expected=MC.LEARN_ORIG)
+    for va_, o_, n_ in SL.float_sites(_stock) + list(SL.CLAMP_SITES):                  # v058 1/64T, 1/128
+        p.write_bytes(va_, n_, expected=o_)
     p.write_bytes(TR.SETSTEP, T.bw(TR.SETSTEP, va_cnt), expected=TR.SETSTEP_ORIG)          # v053 loop count
     p.write_bytes(TR.GATE, T.bw(TR.GATE, va_cond) + T.nop(), expected=TR.GATE_ORIG)       # v053 condition gate
     p.write_bytes(TR.TABLE_POOL, struct.pack("<I", evtab_va), expected=struct.pack("<I", TR.TABLE_STOCK))   # v053 list
@@ -547,7 +604,7 @@ def build():
     size = os.path.getsize(out)
     assert size <= BANK1_END - BASE, ("image is %d B, ends at 0x%08X: past flash bank 1 (0x%08X); the bootloader "
                                       "refuses it (v039)" % (size, BASE + size, BANK1_END))
-    return p, out, dict(desc=va_desc, owner=va_owner, A=va_a, B=va_b, C=va_c, N=va_name, T=va_title, TC=va_tcol, H1=va_h[0], H2=va_h[1], X=va_x, ACTV=va_actv, H3=va_h3, H4=va_h4, H5=va_h5, H6=va_h6, H7A=va_h7a, H7B=va_h7b, H7C=va_h7c, SCROLL=va_scroll, LSKIP=va_l, T0R=va_t0r, T0G=va_t0g, RD2=va_rd2, SH=va_sh, NB=va_nb, KNOB=va_knob, W1=va_w1, W2=va_w2, RO=va_ro, SH2=va_sh2, G1=va_g1, G2=va_g2, B2=va_b2, PROBE=va_probe, C2=va_c2, LAUNCH=va_launch5, C3=va_c3n, C3_OLD=va_c3e, C3M=va_c3m, COLOPEN=va_colopen, NAMEPREP=va_nameprep, NAMEFILL=va_namefill, EDITW=va_editw, NAMERET=va_nameret, COLRET=va_colret, ROWSEL=va_rowsel, PISEL=va_pisel, MIDIB=va_midib, ROWMK=va_rowmk, CPW=va_cpw, MCONS=va_mcons, TAP=va_tap, QTABLE=qtable_va, L3MAP=l3map_va, L3HOSTS=l3hosts_va, COLSTATE=va_colstate, PAINT=va_paint4, PVINV=va_pvinv, MIGR=va_migr, UPLW=va_uplw, PVBUILD=va_pvbuild, PVTILE=va_pvtile, TPRESS=va_tpress, TREL=va_trel6, TREL5=va_trel5, HSEL=va_hsel, TOPBAR=va_topbar, TBACT=va_tbact, TBTAP=va_tbtap, ROLLDRAW=va_rolldraw, HDRCOL=va_hdrcol, INFOW=va_infow, TREL4=va_trel4, MPOS=va_mpos, MDRAW=va_mdraw, MCLEAR=va_mclear, MTAP=va_mtap, ENC=va_enc4, FINDP=va_findp, STREAM=va_stream, ECHO=va_echo, SPSTOCK=va_spstock, SYNC=va_sync, SELCLIP=va_selclip, ADDTR=va_addtr, CLRTR=va_clrtr, ADDW=va_addw, CLRW=va_clrw, POSW=va_posw, STATEW=va_statew, POS2W=va_pos2w, PPTR=va_pptr, PARAMW=va_paramw2, RESTREAM=va_restream, DIRTY=va_dirty, RTICK=va_rtick, CNT=va_cnt, COND=va_cond, ABTAB=ab_va, CNTSET=va_cntset, S2U=va_s2u, U2S=va_u2s, EVTAB=evtab_va, BKD=va_bkd, FSYNC=va_fsync, NOFF=va_noff, TOGGLE=va_toggle, FILLTXT=va_filltxt, FILLCTOR=va_fillctor, MD1=va_md1, MD2=va_md2, FILLTILE=va_filltile, NCA=va_nca, NCB=va_ncb, NCC=va_ncc, INFN=va_infn, table=table_va)
+    return p, out, dict(desc=va_desc, owner=va_owner, A=va_a, B=va_b, C=va_c, N=va_name, T=va_title, TC=va_tcol, H1=va_h[0], H2=va_h[1], X=va_x, ACTV=va_actv, H3=va_h3, H4=va_h4, H5=va_h5, H6=va_h6, H7A=va_h7a, H7B=va_h7b, H7C=va_h7c, SCROLL=va_scroll, LSKIP=va_l, T0R=va_t0r, T0G=va_t0g, RD2=va_rd2, SH=va_sh, NB=va_nb, KNOB=va_knob, W1=va_w1, W2=va_w2, RO=va_ro, SH2=va_sh2, G1=va_g1, G2=va_g2, B2=va_b2, PROBE=va_probe, C2=va_c2, LAUNCH=va_launch5, C3=va_c3n, C3_OLD=va_c3e, C3M=va_c3m, COLOPEN=va_colopen, NAMEPREP=va_nameprep, NAMEFILL=va_namefill, EDITW=va_editw, NAMERET=va_nameret, COLRET=va_colret, ROWSEL=va_rowsel, PISEL=va_pisel, MIDIB=va_midib, ROWMK=va_rowmk, CPW=va_cpw, MCONS=va_mcons, TAP=va_tap, QTABLE=qtable_va, L3MAP=l3map_va, L3HOSTS=l3hosts_va, COLSTATE=va_colstate, PAINT=va_paint4, PVINV=va_pvinv, MIGR=va_migr, UPLW=va_uplw, PVBUILD=va_pvbuild, PVTILE=va_pvtile, TPRESS=va_tpress, TREL=va_trel6, TREL5=va_trel5, HSEL=va_hsel, TOPBAR=va_topbar, TBACT=va_tbact, TBTAP=va_tbtap, ROLLDRAW=va_rolldraw, HDRCOL=va_hdrcol, INFOW=va_infow, TREL4=va_trel4, MPOS=va_mpos, MDRAW=va_mdraw, MCLEAR=va_mclear, MTAP=va_mtap, ENC=va_enc4, FINDP=va_findp, STREAM=va_stream, ECHO=va_echo, SPSTOCK=va_spstock, SYNC=va_sync, SELCLIP=va_selclip, ADDTR=va_addtr, CLRTR=va_clrtr, ADDW=va_addw, CLRW=va_clrw, POSW=va_posw, STATEW=va_statew, POS2W=va_pos2w, PPTR=va_pptr, PARAMW=va_paramw2, RESTREAM=va_restream, DIRTY=va_dirty, RTICK=va_rtick, CNT=va_cnt, COND=va_cond, ABTAB=ab_va, CNTSET=va_cntset, S2U=va_s2u, U2S=va_u2s, EVTAB=evtab_va, BKD=va_bkd, FSYNC=va_fsync, NOFF=va_noff, TOGGLE=va_toggle, FILLTXT=va_filltxt, FILLCTOR=va_fillctor, MD1=va_md1, MD2=va_md2, FILLTILE=va_filltile, NCA=va_nca, NCB=va_ncb, NCC=va_ncc, INFN=va_infn, SLFIX=va_slfix, FXLAY=va_fxlay, FXLAYC=va_fxlayc, FXMARK=va_fxmark, FXAPPLY=va_fxapply, FXS13=va_fxs13, FXS12=va_fxs12, FXDRAW=va_fxdraw, FXINFO=va_fxinfo, FXBACK=va_fxback, SVHOOK=va_svhook, FXROWS=va_fxrows, FXTABS=va_fxtabs, LABINIT=va_labinit, MODDESC=va_moddesc, MODBUILD=va_modbuild, MODEDIT=va_modedit, LEARNEN=va_learnen, CCIN=va_ccin, CCAPPLY=va_ccapply, FXMODCC=va_fxmodcc, SLTAB=sl_tab_va, table=table_va)
 
 
 def main():

@@ -10,6 +10,7 @@ your own risk; modified firmware may affect your warranty. It has been tested on
 - Boots into SEQS instead of PADS.
 - L3 clip launcher: 8 columns x 5 rows, launches quantized to PrCh Quant.
 - Per-clip Duty / Quant / Step Len / Step Count, so polyrhythms are possible (a 5-step clip loops every 5 steps).
+- Step Len and Quant Size go down to 1/64T and 1/128.
 - Column page (long press a column header): Step Mode, MIDI Out, and rename with the stock keyboard.
 - CLEAR / UNDO menu (long press a clip).
 - MIDI notes 109 / 110 select the previous / next preset; notes 111-118 launch or stop columns 1-8.
@@ -20,10 +21,17 @@ your own risk; modified firmware may affect your warranty. It has been tested on
   FILL / -FILL, next to the stock chances. Loops count from the clip launch; one-step clips play conditions always.
   Notes with a condition or chance are drawn green.
 - FILL: hold BACK on SEQS (selected clip), MIDI notes 119-126 (columns 1-8 of the selected row), or the FILL toggle in
-  the piano roll. A clip with FILL notes turns orange-red while fill is on.
+  the piano roll. A clip with FILL notes turns bluish green while fill is on.
 - Piano roll top row: MIDI, Edit, Event, FILL (+ the pad miniature in KEYS mode).
 - SEQS: thin clip separators, scroll arrows, a tap on a column header stops it; INFO on a column's Name row renames it.
 - The bars:beats counter in the header is right-aligned and grows to the left.
+- FX send page (FX opens it first, then XY FX, then EQ): the 16 pads, each with its DLY and RVB send level, and
+  full-height DLY / RVB bars at the sides. BR / BL select a pad or a bar, TL / TR set the selected pad's DLY / RVB
+  send. INFO on a bar opens that effect's settings; INFO on a pad opens a page with only "DLY amount" and
+  "RVB amount".
+- MIDI CC controls the per-pad sends: on that page, INFO on a row opens its MOD page with the sources none / CC and
+  Learn. Learn a controller knob; Amount sets the range (50 % = the knob covers 0..50 %), a negative Amount inverts
+  it. One CC can drive several pads and both sends. The mapping is saved with the preset.
 - Splash shows `3.1.9(NN)`, the mod release number.
 
 ### Known issues
@@ -31,6 +39,9 @@ your own risk; modified firmware may affect your warranty. It has been tested on
 - Fill state is not saved; it is off after boot.
 - A MIDI note-off 119-126 on any channel clears that column's fill.
 - On stock firmware, notes with a trig condition play always.
+- The sends take only CC as a modulation source. The CC writes the send value itself, like the knob on the page, so
+  the two overwrite each other. Amount 0 % sets the send to 0 on every CC.
+- The pad page opened from the FX send page leaves an empty strip where the tabs are on the normal pad page.
 
 ## Install
 
@@ -49,11 +60,11 @@ Put the stock image at `firmware/BLACKBOX-3.1.9.bin` (see `firmware/README.md`),
 
 ```
 pip install -r requirements.txt
-python mod/build.py 57
+python mod/build.py 64
 ```
 
-The result is byte-identical to release v057: check `out/BLACKBOX.bin` against `output_sha256` in
-`docs/patches/v057.json`. Tests: `python -m pytest tests -q` and `node --test tests/js/patcher.test.mjs`.
+The result is byte-identical to release v064: check `out/BLACKBOX.bin` against `output_sha256` in
+`docs/patches/v064.json`. Tests: `python -m pytest tests -q` and `node --test tests/js/patcher.test.mjs`.
 
 ## How it works
 
