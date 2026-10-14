@@ -64,10 +64,42 @@ SCP_ACTIVE = 0x0809FE3C                                     # r4 = GetParam(sub 
 CLIP_IDS = (P_STEPLEN, P_STEPCOUNT, 0x49, 0x46)             # v041: per-clip ids (read from the active layer)
 
 
-def rd2(va, L, ids=(P_STEPLEN, P_STEPCOUNT), clamp_stepmode=False, name_id=None):
+def rd2(va, L, ids=(P_STEPLEN, P_STEPCOUNT), clamp_stepmode=False, name_id=None, clip_ids=(), cdrec_va=None,
+        clip_max=10, label_id=None, labfill_va=None):
     """Seq page rows of `ids`: read from the active layer's record, as the write path writes them.
-    Active layer > 3 -> the default object (Resolve's fallback, the same as SetCellParam's write)."""
+    Active layer > 3 -> the default object (Resolve's fallback, the same as SetCellParam's write).
+    v065 `clip_ids` (with `cdrec_va`): read from the selected clip's record (CDREC, the record CDEDIT writes), not
+    from the active-layer path; no clip -> 0; value outside 0..clip_max -> 0.
+    v066 `label_id` (with `labfill_va`): bl LABFILL (writes the label text into the row's buffer), return 1. Never
+    the packed word: the row is a kind-5 enum with a 2-entry table, a raw value would index past it."""
     c = b""
+    if label_id is not None:
+        c += T.ldr_imm32(3, label_id)
+        c += T.cmp_reg(1, 3)
+        c += T.b_cond(va + len(c), "ne", L.get("notlab", va))
+        c += T.push_lo([4], lr=True)           # 8 B: sp stays 8-aligned
+        c += T.bl(va + len(c), labfill_va)
+        c += T.movs_imm8(0, 1)
+        c += T.pop_lo([4], pc=True)
+        L["notlab"] = va + len(c)
+    for i, pid in enumerate(clip_ids):
+        c += T.ldr_imm32(3, pid)
+        c += T.cmp_reg(1, 3)
+        c += T.b_cond(va + len(c), "ne", L.get("notclip%d" % i, va))
+        c += T.push_lo([4], lr=True)
+        c += T.mov_reg(4, 1)                   # id
+        c += T.bl(va + len(c), cdrec_va)       # r0 = record or 0 (r0-r3 only)
+        c += T.cmp_imm(0, 0)
+        c += T.b_cond(va + len(c), "eq", L.get("clipout%d" % i, va))
+        c += T.mov_reg(1, 4)
+        c += T.bl(va + len(c), GETPARAM)
+        c += T.cmp_imm(0, clip_max)
+        c += T.b_cond(va + len(c), "ls", L.get("clipret%d" % i, va))   # unsigned: negative -> 0
+        L["clipout%d" % i] = va + len(c)
+        c += T.movs_imm8(0, 0)
+        L["clipret%d" % i] = va + len(c)
+        c += T.pop_lo([4], pc=True)
+        L["notclip%d" % i] = va + len(c)
     if name_id is not None:                    # v046: the column page's Name row reads 1 (edits in both directions)
         c += T.ldr_imm32(3, name_id)
         c += T.cmp_reg(1, 3)

@@ -17,6 +17,16 @@ CVD = {
     17: 0x5E646C, 32: 0xF0E442,
     31: 0x56B4E9,   # v049: pressed button fill, sky blue instead of the stock cyan #09D7F5
     9: 0x52585F,    # v013 (a bit darker than v012 0x5E646C): new lane/panel grey for the piano roll, grids, menus, meters (gridsplit.py)
+    18: 0x42556B,   # v065: clip colour Slate
+    19: 0x29596B,   # v065: clip colour Denim
+    20: 0x295D5A,   # v065: clip colour Teal
+    21: 0x395942,   # v065: clip colour Sage
+    22: 0x4A5931,   # v065: clip colour Moss
+    23: 0x635121,   # v065: clip colour Ochre
+    25: 0x734531,   # v065: clip colour Clay
+    26: 0x6B454A,   # v065: clip colour Rose
+    28: 0x634963,   # v065: clip colour Mauve
+    33: 0x5A496B,   # v065: clip colour Plum
 }
 
 ACTIVE_NAME = "colour-blind safe"

@@ -16,6 +16,7 @@ import launch as LA
 
 COLPAGE_OFF = 106
 MODE_OFF, MODE_SEQS = 0x8CA4, 0x2C          # session: current UI mode (0x2C = SEQS)
+MODE_KBD, MODE_PARAM = 0x10, 0x1E             # v066: keyboard, param page (KBDF survives only these)
 SETVIEW = 0x0809EAEC                        # SetView(S, mode, 0, 0)
 SEL_DESC = 0x1C                             # session: u16 selected sequence desc
 LIST_SEQ, LIST_MIDI = 0x080EEF28, 0x080EEEE0
@@ -93,12 +94,29 @@ def colopen(va, L, descs_va, nameprep_va=None):
     return c
 
 
-def colret(va, L, selclip_va, clear_kbd=False):
+def colret(va, L, selclip_va, clear_kbd=False, kbdf_off=None):
+    """v066 `kbdf_off` (mod state offset of the clip-label keyboard flag): COLRET runs on every defaultTask loop
+    pass (C3N at HOOK_C 0x08043E28), in every mode. While the current mode is neither 0x10 (keyboard) nor 0x1E
+    (param page) it clears that flag, whether or not the column page is open. The real round trip goes 0x1E -> 0x10
+    -> 0x1E and keeps it; any other exit (SEQ, PADS, FX, any mode button) clears it, so LABRET never sees a stale
+    flag. None emits the earlier bytes."""
     c = T.push_lo([4], lr=True)
     c += T.ldr_imm32(4, P5.DESC_ARRAY_PTR)
     c += T.ldr_imm(4, 4, 0)
     c += T.cmp_imm(4, 0)
     c += T.b_cond(va + len(c), "eq", L.get("out", va))
+    if kbdf_off is not None:
+        c += T.ldr_imm32(0, LA.SESSION + MODE_OFF)
+        c += T.ldrb_imm(0, 0, 0)
+        c += T.cmp_imm(0, MODE_KBD)
+        c += T.b_cond(va + len(c), "eq", L.get("kbdf", va))
+        c += T.cmp_imm(0, MODE_PARAM)
+        c += T.b_cond(va + len(c), "eq", L.get("kbdf", va))
+        c += T.ldr_imm32(1, LA.STATE_OFF + kbdf_off)
+        c += T.adds_reg(1, 4, 1)
+        c += T.movs_imm8(0, 0)
+        c += T.strb_imm(0, 1, 0)             # neither keyboard nor page: the label keyboard flag is stale
+        L["kbdf"] = va + len(c)
     c += T.ldr_imm32(0, LA.STATE_OFF + COLPAGE_OFF)
     c += T.add_reg(4, 0)
     c += T.ldrb_imm(0, 4, 0)

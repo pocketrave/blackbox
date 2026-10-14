@@ -260,7 +260,7 @@ def rowmark(va, L):
 
 
 def paint(va, L, colstate_va, table_va, digits_va, rtick_va=None, menudraw_va=None, pvtile_va=None,
-          rowmark_va=None, hdrcol_va=None, filltile_va=None):
+          rowmark_va=None, hdrcol_va=None, filltile_va=None, clipcol_va=None, cliplab_va=None):
     c = T.push_lo([4, 5, 6, 7], lr=True)
     c += T.sub_sp_imm(FR)
     c += T.mov_reg(4, 0)                      # r4 = view
@@ -356,6 +356,10 @@ def paint(va, L, colstate_va, table_va, digits_va, rtick_va=None, menudraw_va=No
             c += T.b_cond(va + len(c), "ne", L.get("col" + t, va))
             c += T.movs_imm8(1, C_EMPTY)
             L["col" + t] = va + len(c)
+            if clipcol_va is not None:        # v065: the clip's own colour (selection and fill tile still win)
+                c += T.movs_imm8(0, k)
+                c += T.ldr_sp(2, NSLOT)
+                c += T.bl(va + len(c), clipcol_va)
             c += T.movs_imm8(3, SEL_OFF)
             c += T.add_reg(3, 7)
             c += T.ldrb_imm(0, 3, 0)
@@ -383,6 +387,12 @@ def paint(va, L, colstate_va, table_va, digits_va, rtick_va=None, menudraw_va=No
                 c += T.ldr_sp(2, NSLOT)
                 c += T.mov_reg(3, 6)
                 c += T.bl(va + len(c), pvtile_va)
+            if cliplab_va is not None:        # v066: the clip's label, 6x8 white, glyph top-left 2 px inside the tile
+                c += T.movs_imm8(0, k)
+                c += T.ldr_sp(1, NSLOT)
+                c += T.ldr_imm32(2, (x + 3) | (y + 29) << 16)   # TEXT1X rect bottom-left: glyph rows y+29..y+36
+                c += T.mov_reg(3, 6)
+                c += T.bl(va + len(c), cliplab_va)
             # playing?
             c = _col_ptr(c, 3, k)
             c += T.ldrb_imm(0, 3, 0)

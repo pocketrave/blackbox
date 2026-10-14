@@ -15,7 +15,8 @@ import touch as TC
 import colmenu as CM
 
 HDR = 0xFF
-LAST_OFF, FLASH_OFF, FLASH_T_OFF = 108, 109, 2160   # mod state: last clip row, flashing header k+1, u32 start tick
+LAST_OFF, FLASH_OFF, FLASH_T_OFF = 108, 109, 2204   # mod state: last clip row, flashing header k+1, u32 start tick
+# (v068: the tick moved from +2160, where it overlapped colname.TABLE_OFF + 8, to the free +2204..+2207)
 FLASH_MS = 300
 C_FLASH, C_FLASH_TXT = PT.C_ROWMK, 14       # bright yellow, black text
 C_SEL_TXT = 15                              # white text on the blue selected header

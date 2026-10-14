@@ -22,10 +22,17 @@ REQ_LAUNCH, REQ_STOP = 0x80000000, 0x40000000
 SESSION, ENGINE = 0x24020088, 0x2400A9C0
 REGISTRY, REGISTRY_N = 0x24049808, 64
 PLAYER_VT = 0x080D0744
-DIRTY = 0x8CC4
+DIRTY = 0x8CC4                               # session byte: stock preset-modified flag (PSET Save / Load gate)
 MAX_EVENTS = 0x200
 
 GETPARAM, SETPARAM = 0x08093E9C, 0x08093ECC
+
+
+def set_modified(ra, rv):
+    """v067: [SESSION + DIRTY] = 1 (the stock preset-modified flag; PSET enables Save / Load when it is set).
+    Uses two low registers (ra, rv), nothing else; defaultTask only."""
+    return T.ldr_imm32(ra, SESSION + DIRTY) + T.movs_imm8(rv, 1) + T.strb_imm(rv, ra, 0)
+
 PARAMPOST = 0x0804C59C                       # (eng, code, id, value, [sp] 0, [sp+4] slot)
 CLEARSLOT = 0x0804C7E8                       # (eng, code, 0, slot)
 ADDEVENT = 0x0804C798                        # (eng, code, event*, [session+0x8CBC], [sp] slot)

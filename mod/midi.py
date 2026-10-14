@@ -15,6 +15,7 @@ import thumb as T
 import phase5 as P5
 import launch as LA
 import paint as PT
+import colmenu as CM
 
 NOTE_LO, NOTE_HI = 111, 118
 PROD_OFF, SEEN_OFF = 2100, 2108             # mod state: u8 per column (2212 B free, previews end at 2100)
@@ -134,11 +135,20 @@ def tap(va, L, table_va, colstate_va, selclip_va, dirty_va):
     c += T.add_reg(7, 0)                     # r7 = mod state
     c += T.mov_reg(0, 5)
     c += T.bl(va + len(c), colstate_va)      # play / pending of column k, now
+    # v067: on the clip / info page (0x1E) or the keyboard (0x10) a MIDI launch keeps the selection (+80/+81) and
+    # the edited record (no SELCLIP); the launch / stop decision below does not depend on the selection
+    c += T.ldr_imm32(0, LA.SESSION + CM.MODE_OFF)
+    c += T.ldrb_imm(0, 0, 0)
+    c += T.cmp_imm(0, CM.MODE_PARAM)
+    c += T.b_cond(va + len(c), "eq", L.get("nosel", va))
+    c += T.cmp_imm(0, CM.MODE_KBD)
+    c += T.b_cond(va + len(c), "eq", L.get("nosel", va))
     c += T.movs_imm8(0, SEL_OFF)
     c += T.add_reg(0, 7)
     c += T.strb_imm(5, 0, 0)                 # selection = (k, n): a tap always selects the clip
     c += T.strb_imm(6, 0, 1)
     c += T.bl(va + len(c), selclip_va)
+    L["nosel"] = va + len(c)
     # an empty clip only selects (v030)
     c += T.movs_imm8(2, 10)
     c += T.muls(2, 5)

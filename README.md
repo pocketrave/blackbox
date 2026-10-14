@@ -32,6 +32,14 @@ your own risk; modified firmware may affect your warranty. It has been tested on
 - MIDI CC controls the per-pad sends: on that page, INFO on a row opens its MOD page with the sources none / CC and
   Learn. Learn a controller knob; Amount sets the range (50 % = the knob covers 0..50 %), a negative Amount inverts
   it. One CC can drive several pads and both sends. The mapping is saved with the preset.
+- Per-clip colour and label: the clip's INFO x2 page has a Colour row (Default + 10 muted colours) and a Label row
+  (stock keyboard, up to 8 characters). The SEQS grid fills the clip with its colour and shows the label at the top
+  left. Both are saved with the preset; CLEAR keeps them. Editing them (or a column name) enables PSET Save.
+- PADS and the FX send page show the clip progress as a bar with a 1-px frame; the FX send stripes sit above it.
+- FX send page pad menu: the waveform button is hidden; the miniature opens the pad picker and then the picked pad's
+  DLY / RVB menu.
+- A green "M" left of the counter lights for 150 ms on each incoming MIDI Note On / Note Off / CC (MIDI IN and
+  USB-A host, any channel).
 - Splash shows `3.1.9(NN)`, the mod release number.
 
 ### Known issues
@@ -42,6 +50,7 @@ your own risk; modified firmware may affect your warranty. It has been tested on
 - The sends take only CC as a modulation source. The CC writes the send value itself, like the knob on the page, so
   the two overwrite each other. Amount 0 % sets the send to 0 on every CC.
 - The pad page opened from the FX send page leaves an empty strip where the tabs are on the normal pad page.
+- The MIDI "M" does not light while a preset loads (the stock firmware drops incoming notes and CC then).
 
 ## Install
 
@@ -60,11 +69,11 @@ Put the stock image at `firmware/BLACKBOX-3.1.9.bin` (see `firmware/README.md`),
 
 ```
 pip install -r requirements.txt
-python mod/build.py 64
+python mod/build.py 70
 ```
 
-The result is byte-identical to release v064: check `out/BLACKBOX.bin` against `output_sha256` in
-`docs/patches/v064.json`. Tests: `python -m pytest tests -q` and `node --test tests/js/patcher.test.mjs`.
+The result is byte-identical to release v070: check `out/BLACKBOX.bin` against `output_sha256` in
+`docs/patches/v070.json`. Tests: `python -m pytest tests -q` and `node --test tests/js/patcher.test.mjs`.
 
 ## How it works
 

@@ -57,6 +57,9 @@ import trig as TR
 import steplen as SL
 import fxpage as FXP
 import modcc as MC
+import clipdeco as CD
+import midiind as MD
+import padbar as PB
 
 LEGACY = os.environ.get("BB_LEGACY_CAVES") == "1"
 BANK1_END = 0x08100000                     # v039 (hardware): an image past flash bank 1 fails "Unable to verify"
@@ -131,7 +134,57 @@ for _i, _rgb in sorted(PL.ACTIVE.items()):
         PALETTE_OVERRIDES[_i] = (_old, 0xFF000000 | _rgb)
 
 
+# ---- v068: stock FindIdByName 0x0808E368 walks only the real descriptor slots ---------------------------------------
+# It strncmps [slot+0x18] (a char*) of every slot from [0x2401F4FC] up to the end constant. Stock walks all 500 slots
+# (end = base + 0x36B0), so the mod state in slots 0x1A1..0x1F3 was read as tag pointers on every preset load.
+# Static proof (3.1.9): the highest registered id is 0x1A0 (registrar 0x0808C0A8 + the mod descriptor caves); the only
+# other users of [0x2401F4FC] are the registrar, the boot alloc/memset 0x0808C158 and seven id-indexed accessors
+# 0x0808E220..0x0808E33C (one slot each, no walk).
+FIRST_MOD_SLOT = LA.STATE_OFF // 28                     # 0x1A1: the first slot of the mod state
+FINDID_END_SITE = 0x0808E384                            # movw r5,#0x36b0 (end = base + 500 * 28)
+FINDID_END_ORIG = T.movw(5, 500 * 28)
+FINDID_END_NEW = T.movw(5, FIRST_MOD_SLOT * 28)          # movw r5,#0x2d9c (end = base + 0x1A1 * 28)
+# The loop ends on `cmp r4,r5; beq` after `adds r4,#0x1c`: the end must be a whole number of slots (0x2D8C, 416.4
+# slots, would never be equal and the walk would run on through RAM).
+assert FIRST_MOD_SLOT == 0x1A1 and NEW_ID < FIRST_MOD_SLOT and len(FINDID_END_NEW) == len(FINDID_END_ORIG) == 4
+assert FIRST_MOD_SLOT * 28 == 0x2D9C and FINDID_END_NEW == bytes.fromhex("42f69c55")
+
+
+def modram_fields():
+    """(name, offset from [0x2401F4FC], size) of every mod RAM field with a known offset constant: mod state (slots
+    0x1A1..0x1EF, from LA.STATE_OFF) and the free descriptor slots 0x1F0..0x1F3 (from [0x2401F4FC])."""
+    S = LA.STATE_OFF
+    f = [("launch request", S + 0, 4), ("launch slot map 8 x 4", S + 4, 32),
+         ("COLSTATE 8 x 4", S + TR.COL_OFF, 32), ("touch tick/x/y/armed", S + TC.T_BASE, 9),
+         ("sel_k/sel_n", S + TC.SEL_OFF, 2), ("SELCELL", S + CP.SELCELL_OFF, 1), ("repaint", S + TC.REPAINT_OFF, 1),
+         ("QCELL 8", S + LA.QCELL_OFF, 8), ("menu", S + MN.MENU_OFF, 1), ("preview gen", S + PV.PV_GEN_OFF, 1),
+         ("colpage", S + CM.COLPAGE_OFF, 1), ("colname kbd", S + CN.KBD_OFF, 1), ("last clip row", S + HS.LAST_OFF, 1),
+         ("flashing header", S + HS.FLASH_OFF, 1), ("preview tiles", S + PV.PV_BASE, 40 * PV.PV_TILE),
+         ("preview scratch", S + PV.PV_SCR, 0x184), ("midi PROD", S + MI.PROD_OFF, 8), ("midi SEEN", S + MI.SEEN_OFF, 8),
+         ("sim MIDI injector / test flags (sim only)", S + 2120, 24), ("colname name buffer", S + CN.NAMEBUF_OFF, 8),
+         ("colname table 3 x ptr", S + CN.TABLE_OFF, 12), ("hdrsel tick", S + HS.FLASH_T_OFF, 4),
+         ("trig HELD", S + TR.HELD_OFF, 1), ("trig MIDI", S + TR.MIDI_OFF, 1), ("trig LATCH", S + TR.LATCH_OFF, 1),
+         ("trig EFF", S + TR.EFF_OFF, 1), ("trig cnt 8 x u16", S + TR.CNT_OFF, 16), ("trig lastres 8", S + TR.LAST_OFF, 8),
+         ("FX sel", FXP.SEL_OFF, 1), ("FX fromfx", FXP.FROMFX_OFF, 1), ("clip label kbd flag", S + CD.KBDF_OFF, 1),
+         ("FX ACC 2 x i32", FXP.ACC_OFF, 8),
+         ("phase5/6 scratch", P5.SCRATCH_OFF, 24), ("FX label buffers 2 x 16", FXP.LBUF_OFF, 2 * FXP.LBUF_LEN),
+         ("modcc mbox 8 x u32", MC.MBOX_OFF, 4 * MC.NSLOT),
+         ("MIDI in tick (v070)", S + MD.T_OFF, 4),
+         ("clip label LTAB 2 x ptr", CD.SLOT_1F3 + CD.LTAB_IN_SLOT, 8), ("clip label LBUF", CD.SLOT_1F3 + CD.LBUF_IN_SLOT, 9)]
+    return f
+
+
+def check_modram():
+    """Fail the build if two mod RAM fields overlap or a field leaves the descriptor array (500 x 28 B)."""
+    f = sorted(modram_fields(), key=lambda x: x[1])
+    for (n1, o1, s1), (n2, o2, s2) in zip(f, f[1:]):
+        assert o1 + s1 <= o2, "mod RAM overlap: %s +%d..+%d and %s +%d..+%d" % (n1, o1, o1 + s1 - 1, n2, o2, o2 + s2 - 1)
+    assert f[0][1] >= LA.STATE_OFF and f[-1][1] + f[-1][2] <= 500 * 28, "mod RAM field outside slots 0x1A1..0x1F3"
+    return f
+
+
 def build():
+    check_modram()
     p = Patcher(STOCK)
 
     # verify every site before writing anything
@@ -150,6 +203,7 @@ def build():
         p.expect(site, orig)
     p.expect(0x0809C0D6, P6.ADD_R0_R5_8)
     p.expect(P6.TCOL_SITE, P6.TCOL_ORIG)
+    p.expect(MD.MIDIT_SITE, MD.MIDIT_ORIG)
     title_orig = bytes(p.data[TITLE_SITE - BASE:TITLE_BACK - BASE])
     if title_orig[:2] != bytes.fromhex("8c23"):
         raise PatchError("title rect site changed: %s" % title_orig.hex(" "))
@@ -214,6 +268,10 @@ def build():
     for s_, o_ in ((TR.NCA_SITE, TR.NCA_ORIG), (TR.NCB_SITE, TR.NCB_ORIG), (TR.NCC_SITE, TR.NCC_ORIG)):
         p.expect(s_, o_)
     p.expect(SS.POOL_SITE, SS.POOL_ORIG)
+    for s_, o_, _n in PB.SITES:                                                 # v069
+        p.expect(s_, o_)
+    p.expect(FXP.TICK_SITE, FXP.TICK_ORIG)
+    p.expect(FXP.PICK_SITE, FXP.PICK_ORIG)
     p.expect(SS.L_SITE, SS.L_ORIG)
     for s_, o_ in ((SS.RF_TOP_SITE, SS.RF_TOP_ORIG), (SS.RF_RESET_SITE, SS.RF_RESET_ORIG),
                    (SS.T0R_SITE, SS.T0R_ORIG), (SS.T0G_SITE, SS.T0G_ORIG)):
@@ -251,6 +309,7 @@ def build():
         c += T.bl(va + len(c), va_slfix)     # v058
         c += T.bl(va + len(c), va_labinit)   # v060
         c += T.bl(va + len(c), va_moddesc)   # v063
+        c += T.bl(va + len(c), va_cddesc)    # v065 clip colour / label
         c += desc_orig                       # add sp,#0x14 ; pop.w {...,pc}
         return c
 
@@ -293,6 +352,12 @@ def build():
     va_learnen = emit(MC.learnen)
     va_ccin = emit(MC.ccin)
     va_ccapply = emit(MC.ccapply)
+    _cd_va = BASE + len(p.data) + ((4 - len(p.data) % 4) % 4)                     # v065 clip colour / label
+    cd_blob_va = p.append(CD.names_blob(_cd_va), align=4)
+    assert cd_blob_va == _cd_va, "clipdeco blob alignment drift"
+    cd_names_va = CD.blob_addr(cd_blob_va, "CDNAMES")
+    va_cddesc = emit(lambda v, L: CD.cddesc(v, L, cd_blob_va))
+    va_cdadd = emit(CD.cdadd)
     va_desc = emit(s1_desc)
     va_owner = emit(s1_owner)
     va_a = emit(P5.cave_a)
@@ -328,7 +393,7 @@ def build():
     va_l = emit(SS.lskip)
     va_t0r = emit(SS.t0r)
     va_t0g = emit(lambda v, L: SS.t0g(v, L, va_actv))
-    va_rd2 = emit(lambda v, L: IP.rd2(v, L, IP.CLIP_IDS, clamp_stepmode=True, name_id=CN.NAME_ID))   # v041/2/6
+    # v065: RD2 (v041/2/6) is emitted further down, after CDREC (it needs the L3 record table)
     va_sh = emit(IP.sh)
     va_nb = emit(IP.nb)
     va_knob = emit(SS.knob)
@@ -435,10 +500,19 @@ def build():
     name_label_va = p.append(CN.LABEL, align=4)                                   # v046 Name row
     va_namefill = emit(CN.namefill)
     va_nameprep = emit(lambda v, L: CN.nameprep(v, L, va_namefill, name_label_va))
-    va_editw = emit(lambda v, L: CN.editw(v, L, name_label_va + 5))
-    va_nameret = emit(lambda v, L: CN.nameret(v, L, va_sh2, va_namefill))
+    va_cdrec = emit(lambda v, L: CD.cdrec(v, L, l3map_va))                         # v065 Colour row
+    va_cdhas = emit(CD.cdhas)
+    va_labfill = emit(lambda v, L: CD.labfill(v, L, va_cdrec))                      # v066 Label row
+    va_cdedit = emit(lambda v, L: CD.cdedit(v, L, va_cdrec, va_cdhas, labfill_va=va_labfill,   # v066 label kbd
+                                            empty_va=name_label_va + 5))
+    va_rd2 = emit(lambda v, L: IP.rd2(v, L, IP.CLIP_IDS, clamp_stepmode=True, name_id=CN.NAME_ID,   # v041/2/6
+                                      clip_ids=(CD.COLOUR_ID,), cdrec_va=va_cdrec, clip_max=CD.COLOUR_MAX,   # v065
+                                      label_id=CD.LAB0_ID, labfill_va=va_labfill))                     # v066
+    va_editw = emit(lambda v, L: CN.editw(v, L, name_label_va + 5, next_va=va_cdedit, kbdf_off=CD.KBDF_OFF))
+    va_labret = emit(lambda v, L: CD.labret(v, L, va_sh2, va_cdrec, va_cdhas, va_labfill))   # v066: -> SH2
+    va_nameret = emit(lambda v, L: CN.nameret(v, L, va_labret, va_namefill))     # v066: NAMERET -> LABRET -> SH2
     va_colopen = emit(lambda v, L: CM.colopen(v, L, l3desc_va, va_nameprep))
-    va_colret = emit(lambda v, L: CM.colret(v, L, va_selclip, clear_kbd=True))
+    va_colret = emit(lambda v, L: CM.colret(v, L, va_selclip, clear_kbd=True, kbdf_off=CD.KBDF_OFF))   # v066
     va_fxmodcc = emit(lambda v, L: MC.fxmodcc(v, L, va_ccapply, va_fsync))       # v063: CC -> pad FX sends
     va_c3n = emit(lambda v, L: CM.c3n(v, L, va_c, va_colret, va_fxmodcc, va_launch5))   # v063: FXMODCC, FILLSYNC, MCONS
     va_trel5 = emit_legacy(lambda v, L: TC.trel(v, L, l3desc_va, va_dirty, l3map_va, selclip_va=va_selclip,
@@ -459,9 +533,11 @@ def build():
     va_rolldraw = emit(lambda v, L: TBR.rolldraw(v, L, fill=True))                 # v053 one-row toolbar + FILL
     va_rowmk = emit(PT.rowmark)                                                   # v043: MIDI row corners
     va_filltile = emit(lambda v, L: TR.filltile(v, L, l3map_va))                   # v055 fill tile rule
+    va_clipcol = emit(lambda v, L: CD.clipcol(v, L, l3map_va))                     # v065 clip colour fill
+    va_cliplab = emit(lambda v, L: CD.cliplab(v, L, l3map_va))                     # v066 clip label on the grid
     va_paint4 = emit(lambda v, L: PT.paint(v, L, va_colstate, l3map_va, digits_va, va_rtick, menudraw_va=va_mdraw,
                                            pvtile_va=va_pvtile, rowmark_va=va_rowmk, hdrcol_va=va_hdrcol,
-                                           filltile_va=va_filltile))
+                                           filltile_va=va_filltile, clipcol_va=va_clipcol, cliplab_va=va_cliplab))
     # ---- v053: trig conditions
     ab_va = p.append(TR.ab_table(), align=4)
     va_cnt = emit(TR.cnt)
@@ -484,7 +560,11 @@ def build():
     va_nca = emit(lambda v, L: TR.nc_cache(v, L, 7))                              # v055 note colour
     va_ncb = emit(lambda v, L: TR.nc_cache(v, L, 6))
     va_ncc = emit(TR.nc_colour)
-    va_infn = emit(CN.infn)                                                        # v056 INFO on the Name row
+    va_infn = emit(lambda v, L: CN.infn(v, L, label_id=CD.LAB0_ID))               # v056 Name row, v066 Label row
+    va_fxpick = emit(FXP.fxpick)                                                  # v069 FX pad menu: picker
+    md_str_va = p.append(MD.M_STR, align=4)                                       # v070 MIDI-in indicator
+    va_midit = emit(MD.midit)
+    va_mind = emit(lambda v, L: MD.mind(v, L, md_str_va, va_tcol))
 
     # ---- install ------------------------------------------------------------
     p.write_bytes(S1_DETOUR_DESC, T.bw(S1_DETOUR_DESC, va_desc) + T.nop(), expected=desc_orig)
@@ -496,7 +576,8 @@ def build():
     for (site, orig, _), va in zip(P6.SITES, va_h):
         p.write_bytes(site, T.bw(site, va), expected=orig)
     p.write_bytes(TITLE_SITE, T.bw(TITLE_SITE, va_title), expected=title_orig[:4])
-    p.write_bytes(P6.TCOL_SITE, T.bw(P6.TCOL_SITE, va_tcol) + T.nop(), expected=P6.TCOL_ORIG)
+    p.write_bytes(P6.TCOL_SITE, T.bw(P6.TCOL_SITE, va_mind) + T.nop(), expected=P6.TCOL_ORIG)   # v070: MIND -> TC
+    p.write_bytes(MD.MIDIT_SITE, T.bw(MD.MIDIT_SITE, va_midit), expected=MD.MIDIT_ORIG)    # v070 MIDI-in tick
     for va, orig, new in STATUSBAR_PATCHES:
         p.write_bytes(va, new, expected=orig)
     p.write_bytes(STARTUP_VIEW_SITE, STARTUP_VIEW_NEW, expected=STARTUP_VIEW_ORIG)
@@ -579,6 +660,11 @@ def build():
     p.write_bytes(MC.BUILD_SITE, T.bw(MC.BUILD_SITE, va_modbuild), expected=MC.BUILD_ORIG)
     p.write_bytes(MC.EDIT_SITE, T.bw(MC.EDIT_SITE, va_modedit), expected=MC.EDIT_ORIG)
     p.write_bytes(MC.LEARN_SITE, T.bw(MC.LEARN_SITE, va_learnen), expected=MC.LEARN_ORIG)
+    p.write_bytes(CD.CTOR_SITE, T.bw(CD.CTOR_SITE, va_cdadd), expected=CD.CTOR_ORIG)       # v065 record params
+    for free in (CD.LIST_SEQ_FREE, CD.LIST_MIDI_FREE):                              # v065 Colour row
+        p.write_bytes(free, struct.pack("<H", CD.COLOUR_ID), expected=bytes(2))
+    for free in (CD.LIST_SEQ_FREE, CD.LIST_MIDI_FREE):                              # v066 Label row
+        p.write_bytes(free + 2, struct.pack("<H", CD.LAB0_ID), expected=bytes(2))
     for va_, o_, n_ in SL.float_sites(_stock) + list(SL.CLAMP_SITES):                  # v058 1/64T, 1/128
         p.write_bytes(va_, n_, expected=o_)
     p.write_bytes(TR.SETSTEP, T.bw(TR.SETSTEP, va_cnt), expected=TR.SETSTEP_ORIG)          # v053 loop count
@@ -598,13 +684,18 @@ def build():
     for s_, o_, v_ in ((TR.NCA_SITE, TR.NCA_ORIG, va_nca), (TR.NCB_SITE, TR.NCB_ORIG, va_ncb), (TR.NCC_SITE, TR.NCC_ORIG, va_ncc)):
         p.write_bytes(s_, T.bl(s_, v_), expected=o_)                                # v055 note colour
     p.write_bytes(CN.INFO_SITE, T.bw(CN.INFO_SITE, va_infn) + T.nop() * 2, expected=CN.INFO_ORIG)   # v056
+    p.write_bytes(FINDID_END_SITE, FINDID_END_NEW, expected=FINDID_END_ORIG)          # v068 name lookup: slots < 0x1A1
+    for s_, o_, n_ in PB.SITES:                                                     # v069 PADS bar: 1-px frame
+        p.write_bytes(s_, n_, expected=o_)
+    p.write_bytes(FXP.TICK_SITE, FXP.tick_patch(), expected=FXP.TICK_ORIG)          # v069 FX tiles: progress value
+    p.write_bytes(FXP.PICK_SITE, T.bl(FXP.PICK_SITE, va_fxpick), expected=FXP.PICK_ORIG)   # v069 FX pad menu picker
     p.verify_safety()
     out = os.path.join(OUTDIR, "BLACKBOX_all.bin")
     p.save(out)
     size = os.path.getsize(out)
     assert size <= BANK1_END - BASE, ("image is %d B, ends at 0x%08X: past flash bank 1 (0x%08X); the bootloader "
                                       "refuses it (v039)" % (size, BASE + size, BANK1_END))
-    return p, out, dict(desc=va_desc, owner=va_owner, A=va_a, B=va_b, C=va_c, N=va_name, T=va_title, TC=va_tcol, H1=va_h[0], H2=va_h[1], X=va_x, ACTV=va_actv, H3=va_h3, H4=va_h4, H5=va_h5, H6=va_h6, H7A=va_h7a, H7B=va_h7b, H7C=va_h7c, SCROLL=va_scroll, LSKIP=va_l, T0R=va_t0r, T0G=va_t0g, RD2=va_rd2, SH=va_sh, NB=va_nb, KNOB=va_knob, W1=va_w1, W2=va_w2, RO=va_ro, SH2=va_sh2, G1=va_g1, G2=va_g2, B2=va_b2, PROBE=va_probe, C2=va_c2, LAUNCH=va_launch5, C3=va_c3n, C3_OLD=va_c3e, C3M=va_c3m, COLOPEN=va_colopen, NAMEPREP=va_nameprep, NAMEFILL=va_namefill, EDITW=va_editw, NAMERET=va_nameret, COLRET=va_colret, ROWSEL=va_rowsel, PISEL=va_pisel, MIDIB=va_midib, ROWMK=va_rowmk, CPW=va_cpw, MCONS=va_mcons, TAP=va_tap, QTABLE=qtable_va, L3MAP=l3map_va, L3HOSTS=l3hosts_va, COLSTATE=va_colstate, PAINT=va_paint4, PVINV=va_pvinv, MIGR=va_migr, UPLW=va_uplw, PVBUILD=va_pvbuild, PVTILE=va_pvtile, TPRESS=va_tpress, TREL=va_trel6, TREL5=va_trel5, HSEL=va_hsel, TOPBAR=va_topbar, TBACT=va_tbact, TBTAP=va_tbtap, ROLLDRAW=va_rolldraw, HDRCOL=va_hdrcol, INFOW=va_infow, TREL4=va_trel4, MPOS=va_mpos, MDRAW=va_mdraw, MCLEAR=va_mclear, MTAP=va_mtap, ENC=va_enc4, FINDP=va_findp, STREAM=va_stream, ECHO=va_echo, SPSTOCK=va_spstock, SYNC=va_sync, SELCLIP=va_selclip, ADDTR=va_addtr, CLRTR=va_clrtr, ADDW=va_addw, CLRW=va_clrw, POSW=va_posw, STATEW=va_statew, POS2W=va_pos2w, PPTR=va_pptr, PARAMW=va_paramw2, RESTREAM=va_restream, DIRTY=va_dirty, RTICK=va_rtick, CNT=va_cnt, COND=va_cond, ABTAB=ab_va, CNTSET=va_cntset, S2U=va_s2u, U2S=va_u2s, EVTAB=evtab_va, BKD=va_bkd, FSYNC=va_fsync, NOFF=va_noff, TOGGLE=va_toggle, FILLTXT=va_filltxt, FILLCTOR=va_fillctor, MD1=va_md1, MD2=va_md2, FILLTILE=va_filltile, NCA=va_nca, NCB=va_ncb, NCC=va_ncc, INFN=va_infn, SLFIX=va_slfix, FXLAY=va_fxlay, FXLAYC=va_fxlayc, FXMARK=va_fxmark, FXAPPLY=va_fxapply, FXS13=va_fxs13, FXS12=va_fxs12, FXDRAW=va_fxdraw, FXINFO=va_fxinfo, FXBACK=va_fxback, SVHOOK=va_svhook, FXROWS=va_fxrows, FXTABS=va_fxtabs, LABINIT=va_labinit, MODDESC=va_moddesc, MODBUILD=va_modbuild, MODEDIT=va_modedit, LEARNEN=va_learnen, CCIN=va_ccin, CCAPPLY=va_ccapply, FXMODCC=va_fxmodcc, SLTAB=sl_tab_va, table=table_va)
+    return p, out, dict(desc=va_desc, owner=va_owner, A=va_a, B=va_b, C=va_c, N=va_name, T=va_title, TC=va_tcol, H1=va_h[0], H2=va_h[1], X=va_x, ACTV=va_actv, H3=va_h3, H4=va_h4, H5=va_h5, H6=va_h6, H7A=va_h7a, H7B=va_h7b, H7C=va_h7c, SCROLL=va_scroll, LSKIP=va_l, T0R=va_t0r, T0G=va_t0g, RD2=va_rd2, SH=va_sh, NB=va_nb, KNOB=va_knob, W1=va_w1, W2=va_w2, RO=va_ro, SH2=va_sh2, G1=va_g1, G2=va_g2, B2=va_b2, PROBE=va_probe, C2=va_c2, LAUNCH=va_launch5, C3=va_c3n, C3_OLD=va_c3e, C3M=va_c3m, COLOPEN=va_colopen, NAMEPREP=va_nameprep, NAMEFILL=va_namefill, EDITW=va_editw, NAMERET=va_nameret, COLRET=va_colret, ROWSEL=va_rowsel, PISEL=va_pisel, MIDIB=va_midib, ROWMK=va_rowmk, CPW=va_cpw, MCONS=va_mcons, TAP=va_tap, QTABLE=qtable_va, L3MAP=l3map_va, L3HOSTS=l3hosts_va, COLSTATE=va_colstate, PAINT=va_paint4, PVINV=va_pvinv, MIGR=va_migr, UPLW=va_uplw, PVBUILD=va_pvbuild, PVTILE=va_pvtile, TPRESS=va_tpress, TREL=va_trel6, TREL5=va_trel5, HSEL=va_hsel, TOPBAR=va_topbar, TBACT=va_tbact, TBTAP=va_tbtap, ROLLDRAW=va_rolldraw, HDRCOL=va_hdrcol, INFOW=va_infow, TREL4=va_trel4, MPOS=va_mpos, MDRAW=va_mdraw, MCLEAR=va_mclear, MTAP=va_mtap, ENC=va_enc4, FINDP=va_findp, STREAM=va_stream, ECHO=va_echo, SPSTOCK=va_spstock, SYNC=va_sync, SELCLIP=va_selclip, ADDTR=va_addtr, CLRTR=va_clrtr, ADDW=va_addw, CLRW=va_clrw, POSW=va_posw, STATEW=va_statew, POS2W=va_pos2w, PPTR=va_pptr, PARAMW=va_paramw2, RESTREAM=va_restream, DIRTY=va_dirty, RTICK=va_rtick, CNT=va_cnt, COND=va_cond, ABTAB=ab_va, CNTSET=va_cntset, S2U=va_s2u, U2S=va_u2s, EVTAB=evtab_va, BKD=va_bkd, FSYNC=va_fsync, NOFF=va_noff, TOGGLE=va_toggle, FILLTXT=va_filltxt, FILLCTOR=va_fillctor, MD1=va_md1, MD2=va_md2, FILLTILE=va_filltile, NCA=va_nca, NCB=va_ncb, NCC=va_ncc, INFN=va_infn, SLFIX=va_slfix, FXLAY=va_fxlay, FXLAYC=va_fxlayc, FXMARK=va_fxmark, FXAPPLY=va_fxapply, FXS13=va_fxs13, FXS12=va_fxs12, FXDRAW=va_fxdraw, FXINFO=va_fxinfo, FXBACK=va_fxback, SVHOOK=va_svhook, FXROWS=va_fxrows, FXTABS=va_fxtabs, FXPICK=va_fxpick, LABINIT=va_labinit, MODDESC=va_moddesc, MODBUILD=va_modbuild, MODEDIT=va_modedit, LEARNEN=va_learnen, CCIN=va_ccin, CCAPPLY=va_ccapply, FXMODCC=va_fxmodcc, CDDESC=va_cddesc, CDADD=va_cdadd, CDREC=va_cdrec, CDHAS=va_cdhas, CDEDIT=va_cdedit, LABFILL=va_labfill, LABRET=va_labret, CLIPCOL=va_clipcol, CLIPLAB=va_cliplab, CDNAMES=cd_names_va, SLTAB=sl_tab_va, MIDIT=va_midit, MIND=va_mind, MSTR=md_str_va, table=table_va)
 
 
 def main():

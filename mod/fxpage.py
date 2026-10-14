@@ -25,10 +25,24 @@ DESELECT = 0x080ABE1C                  # (view): stock deselect of every tile, b
 CTOR_SITE, CTOR_ORIG = 0x080AC3A2, bytes.fromhex("fff73bfd")   # bl DESELECT at the ctor tail
 TRI_SITES = (0x080ABBCE, 0x080ABBEA)   # bl to the tile triangle setters (send != 0 marks)
 TRI_ORIG = (bytes.fromhex("f9f7c7f9"), bytes.fromhex("f9f7c3f9"))
+# v069: the FX tick feeds the tile's progress value (SetBar, as the PADS tick 0x080B47D0) instead of SetRec(playing)
+TILE_BAR = 0x19C                       # tile: 1 = draw the progress bar (stock: PADS tiles only)
+SETBAR = 0x080A4F38                    # (tile, v): +0x190 = v, dirty +0x17D on change
+TICK_SITE = 0x080AC3F6                 # FX tick 0x080AC3B4, r6 = tile, r1 = value (0x080AC3F4)
+TICK_ORIG = bytes.fromhex("b1f57a7f8cbf002101213046f8f74afd")   # cmp.w r1,#1000; ite hi; movhi/movls; mov r0,r6;
+                                                                # bl SetRec 0x080A4E9A
+
+
+def tick_patch():
+    """16 B at TICK_SITE: mov r0,r6; bl SetBar; nop x 5."""
+    c = T.mov_reg(0, 6) + T.bl(TICK_SITE + 2, SETBAR) + T.nop() * 5
+    assert len(c) == len(TICK_ORIG)
+    return c
 
 
 def fxlay(va, L):
-    """(r0 view): full-height bars and frames, hidden FX buttons. Called on show (slot13 0xD4) and by FXLAYC."""
+    """(r0 view): full-height bars and frames, hidden FX buttons; v069: tile +0x19C = 1 (progress bar path).
+    Called on show (slot13 0xD4) and by FXLAYC."""
     c = T.push_lo([4, 5, 6], lr=True)
     c += T.sub_sp_imm(16)                     # 16 pushed + 16: [sp] rect {x, y, w, h}
     c += T.mov_reg(4, 0)
@@ -49,6 +63,17 @@ def fxlay(va, L):
         c += T.add_reg(0, 4)
         c += T.movs_imm8(1, 1)
         c += T.bl(va + len(c), HIDE)
+    # v069: the tiles take the stock PADS bar path (progress bar, padbar.py) instead of the solid strip
+    c += T.movw(0, TILE0_OFF + TILE_BAR)
+    c += T.add_reg(0, 4)
+    c += T.movs_imm8(1, 1)
+    c += T.movs_imm8(2, 16)
+    L["bar19c"] = va + len(c)
+    c += T.strb_imm(1, 0, 0)
+    c += T.adds_imm8(0, 0xD0)                 # += 0x1A0 (16 tiles, contiguous)
+    c += T.adds_imm8(0, 0xD0)
+    c += T.subs_imm8(2, 1)
+    c += T.b_cond(va + len(c), "ne", L.get("bar19c", va))
     c += T.add_sp_imm(16)
     c += T.pop_lo([4, 5, 6], pc=True)
     return c
@@ -456,7 +481,9 @@ C_BG, C_SEND, C_SEL, C_SELBLUE = 1, 5, 15, 4    # C_SELBLUE: the stock selected-
 FONT_CW = 0x240000D4                   # u16 char width of TEXT1X's font (font struct 0x240000D0)
 BAR_FILL = 0x44                        # level bar: its orange fill rect {x, y, w, h}
 SEL_MARGIN = 3                         # a selected bar: its fill is drawn this much narrower on each side
-IND_XO, IND_W, IND_H = (2, 58), 3, 50  # indicator x offsets in the tile (FX1 left, FX2 right), width, inner height
+IND_XO, IND_W, IND_H = (2, 58), 3, 41  # indicator x offsets in the tile (FX1 left, FX2 right), width, inner height
+IND_Y0 = 12                            # v069: indicator bottom = 55 * row + 12 = tile Y + 11, above the progress bar
+                                       # (frame Y .. Y+9, padbar.py); top Y+51 as before (v062: Y+2, h 50)
 LABEL_Y, LABEL_H = 4, 10                # bar labels: at the bottom of the bars
 DR_RECT, DR_REF, DR_VAL, DR_NAME, DR_FRAME = 0, 16, 24, 32, 0x7C
 
@@ -542,7 +569,7 @@ def fxdraw(va, L):
         c += T.lsrs_imm(0, 7, 2)
         c += T.movs_imm8(1, 55)
         c += T.muls(0, 1)
-        c += T.adds_imm8(0, 3)
+        c += T.adds_imm8(0, IND_Y0)
         c += T.str_sp(0, DR_RECT + 4)
         c = _dr_rect(c, w=IND_W)
         c = _dr_call(c, va, FILLRECT, C_SEND)
@@ -640,7 +667,9 @@ CONF_ENDS = (0x080EF0A0, 0x080EF208, 0x080EF370, 0x080EF4DC, 0x080EF640, 0x080EF
              0x080EFD4C)
 CONF_ADD = bytes.fromhex("d900da00")
 MODTAB_SITE, MODTAB_ORIG = 0x080F12EA, bytes.fromhex("32003300")   # mod-square ids 23/24 (duplicates of 12/11)
-LBUF_OFF = 0x1F1 * 28                  # two 16-B label buffers in the free descriptor slot 0x1F1 (from [DESCP])
+LBUF_OFF = 0x1F0 * 28 + 24             # two 16-B label buffers, slot 0x1F0 +24 .. slot 0x1F2 +0 (from [DESCP])
+# (v068: was 0x1F1 * 28; a 16-B second label then reached modcc mbox[0] at slot 0x1F2 +0..+3. Slot 0x1F0 +24..+27 is
+# the slot's tag word, free since FindIdByName stops at slot 0x1A1.)
 LBUF_LEN, NAME_MAX = 16, 7
 DESC = 28
 INFO_SITE, INFO_ORIG = 0x080A305E, bytes.fromhex("fbf745fd")      # bl SetView(S, 0x23) for modes 0x24 and 0x30
@@ -890,14 +919,29 @@ def fxrows(va, L):
     return c
 
 
+WF_OFFS = (0x808, 0x8B8)               # v069: the pad-type ("waveform") button, id 0xE6, on toolbar 1 / 2
+NAME_OFFS = (0xAD0, 0xB70)             # the sample-name field right of it on toolbar 1 / 2 (flex item)
+NAME_X_FX, NAME_X_STOCK = 39, 87       # name field x: in the waveform button's slot / stock (39 + 47 + 1)
+W_HIDDEN = 0x30                        # widget: 1 = hidden (not drawn, not tappable)
+W_X, W_Y, W_W, W_H = 4, 8, 0xC, 0x10   # widget rect {x, y, w, h}
+SETRECT_VT = 0x20                      # widget vt+0x20: SetRect(w, &rect)
+
+
 def fxtabs(va, L):
     """bl at TABS_SITES (r0 page, r1 k): the stock tab-bar choice, then, opened from the send page, all 3 bars hidden.
-    The stock return value is kept."""
-    c = T.push_lo([4, 5, 6], lr=True)
+    v069: from the send page the waveform button (both toolbars) is hidden and the name field takes its slot (right
+    edge kept); otherwise both are put back to stock. Only a changed state is written. The stock return value is
+    kept."""
+    c = T.push_lo([4, 5, 6, 7], lr=True)
+    c += T.sub_sp_imm(20)                     # 20 + 20 = 40: [sp] rect {x, y, w, h}
     c += T.mov_reg(4, 0)
     c += T.bl(va + len(c), TABSEL)
     c += T.mov_reg(5, 0)
-    c = _fromfx(c, va, L, "out")
+    c += T.movs_imm8(6, 0)                    # f = fromfx
+    c = _sel_ptr(c, va, 0, L, "btn")
+    c += T.ldrb_imm(6, 0, 1)
+    c += T.cmp_imm(6, 0)
+    c += T.b_cond_w(va + len(c), "eq", L.get("btn", va))
     for off in TABBAR_OFFS:
         c += T.movw(0, off)
         c += T.add_reg(0, 4)
@@ -905,7 +949,103 @@ def fxtabs(va, L):
         c += T.ldr_imm(3, 3, 0x2C)
         c += T.movs_imm8(1, 1)
         c += T.blx(3)
-    L["out"] = va + len(c)
+    L["btn"] = va + len(c)
+    for k, off in enumerate(WF_OFFS):
+        c += T.movw(0, off)
+        c += T.add_reg(0, 4)
+        c += T.ldrb_w(3, 0, W_HIDDEN)
+        c += T.cmp_reg(3, 6)
+        c += T.b_cond(va + len(c), "eq", L.get("wf%d" % k, va))
+        c += T.mov_reg(1, 6)
+        c += T.bl(va + len(c), HIDE)
+        L["wf%d" % k] = va + len(c)
+    for k, off in enumerate(NAME_OFFS):
+        c += T.movw(7, off)
+        c += T.add_reg(7, 4)
+        c += T.movs_imm8(1, NAME_X_STOCK)
+        c += T.cmp_imm(6, 0)
+        c += T.b_cond(va + len(c), "eq", L.get("nx%d" % k, va))
+        c += T.movs_imm8(1, NAME_X_FX)
+        L["nx%d" % k] = va + len(c)
+        c += T.ldr_imm(2, 7, W_X)
+        c += T.cmp_reg(2, 1)
+        c += T.b_cond(va + len(c), "eq", L.get("nm%d" % k, va))
+        c += T.str_sp(1, 0)                   # x
+        c += T.ldr_imm(3, 7, W_W)
+        c += T.adds_reg(3, 3, 2)
+        c += T.subs_reg(3, 3, 1)
+        c += T.str_sp(3, 8)                   # w + old x - new x: the right edge stays
+        c += T.ldr_imm(3, 7, W_Y)
+        c += T.str_sp(3, 4)
+        c += T.ldr_imm(3, 7, W_H)
+        c += T.str_sp(3, 12)
+        c += T.mov_reg(0, 7)
+        c += T.add_rd_sp(1, 0)
+        c += T.ldr_imm(3, 7, 0)
+        c += T.ldr_imm(3, 3, SETRECT_VT)
+        c += T.blx(3)
+        L["nm%d" % k] = va + len(c)
     c += T.mov_reg(0, 5)
-    c += T.pop_lo([4, 5, 6], pc=True)
+    c += T.add_sp_imm(20)
+    c += T.pop_lo([4, 5, 6, 7], pc=True)
+    return c
+
+
+# ---- v069: the pad miniature on the pad page opened from the send page -------------------------------------------
+# The miniature (id 0x119) opens the stock pad picker. A pick posts 0x138; the controller case 0x138 calls the stock
+# pick handler 0x0809F9E2: SetView(2) (PADS; svhook clears fromfx), select the pad, SetView(the last pad tab). FXPICK
+# replaces that call: opened from the send page, the picked pad is selected (stock 0x080978E4), the send-page
+# selection follows it and its FX pad menu opens (TABCHOOSE(S, 0x1C), as FXINFO). Otherwise the stock handler.
+PICK_SITE, PICK_ORIG = 0x080A1BB0, bytes.fromhex("fdf717ff")       # controller case 0x138: bl 0x0809F9E2
+PICK_STOCK = 0x0809F9E2                # (S, &{u32, u16 code @+4})
+SELPAD = 0x080978E4                    # (S, &ref): [S+0x14] = code (msg 0x63 if changed, engine op)
+PAD_MODES = (0x18, 0x1D)               # the pad page tabs
+
+
+def fxpick(va, L):
+    """bl at PICK_SITE (r0 S, r1 &{u32, u16 code @+4}): see above. r0 = the last callee's return value."""
+    c = T.push_lo([4, 5, 6, 7], lr=True)
+    c += T.sub_sp_imm(4)                      # 20 + 4 = 24
+    c += T.mov_reg(4, 0)
+    c += T.mov_reg(5, 1)
+    c = _sel_ptr(c, va, 6, L, "stock")
+    c += T.ldrb_imm(3, 6, 1)                  # fromfx
+    c += T.cmp_imm(3, 0)
+    c += T.b_cond_w(va + len(c), "eq", L.get("stock", va))
+    c += T.movw(3, 0x8000)
+    c += T.add_reg(3, 4)
+    c += T.ldrb_w(3, 3, MODE_OFF - 0x8000)
+    c += T.subs_imm8(3, PAD_MODES[0])
+    c += T.cmp_imm(3, PAD_MODES[1] - PAD_MODES[0])
+    c += T.b_cond_w(va + len(c), "hi", L.get("stock", va))
+    c += T.ldrh_imm(7, 5, 4)                  # code: a pad (row 0..3, col 0..3), else stock
+    c += T.lsrs_imm(3, 7, 6)                  # row > 3 or another bank
+    c += T.b_cond_w(va + len(c), "ne", L.get("stock", va))
+    c += T.movs_imm8(3, 0xC)                  # col > 3
+    c += T.ands_reg(3, 7)
+    c += T.b_cond_w(va + len(c), "ne", L.get("stock", va))
+    c += T.mov_reg(0, 4)
+    c += T.mov_reg(1, 5)
+    c += T.bl(va + len(c), SELPAD)
+    c = _code_to_rc(c, 7, 2, 3)
+    c = _rc_to_sel(c, 1, 2, 3)
+    c += T.strb_imm(1, 6, 0)                  # the send page selection = the picked pad
+    c += T.mov_reg(0, 4)
+    c += T.movs_imm8(1, V_CONF)
+    c += T.mov_reg(2, 4)
+    c += T.adds_imm8(2, PAD_OFF - 4)
+    c += T.bl(va + len(c), TABCHOOSE)
+    c += T.mov_reg(1, 0)
+    c += T.mov_reg(0, 4)
+    c += T.movs_imm8(2, 0)
+    c += T.movs_imm8(3, 0)
+    c += T.bl(va + len(c), SETVIEW)
+    c += T.b_short(va + len(c), L.get("out", va))
+    L["stock"] = va + len(c)
+    c += T.mov_reg(0, 4)
+    c += T.mov_reg(1, 5)
+    c += T.bl(va + len(c), PICK_STOCK)
+    L["out"] = va + len(c)
+    c += T.add_sp_imm(4)
+    c += T.pop_lo([4, 5, 6, 7], pc=True)
     return c

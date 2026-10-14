@@ -114,14 +114,21 @@ def nameprep(va, L, namefill_va, label_va):
     return c
 
 
-def editw(va, L, empty_va):
-    """b.w at EDIT_SITE (r0 = row owner, r4 = page, r5 = msg {+0xC value, +0x10 id}); frame sp+0x1C.. msg area."""
+def editw(va, L, empty_va, next_va=None, kbdf_off=None):
+    """b.w at EDIT_SITE (r0 = row owner, r4 = page, r5 = msg {+0xC value, +0x10 id}); frame sp+0x1C.. msg area.
+    v065 `next_va`: the non-Name path branches there (r0, r2, r4, r5 unchanged; it runs the displaced ldrh itself).
+    next_va None emits the same bytes as before.
+    v066 `kbdf_off` (mod state offset of the clip-label keyboard flag): the Name path clears it before the send, so
+    only one keyboard owner is waiting. None emits the earlier bytes."""
     c = T.ldr_imm(2, 5, 0x10)                # displaced: ldr r2, [r5, #0x10]
     c += T.ldr_imm32(3, NAME_ID)
     c += T.cmp_reg(2, 3)
     c += T.b_cond(va + len(c), "eq", L.get("name", va))
-    c += T.ldrh_imm(1, 0, 0x38)              # displaced: ldrh r1, [r0, #0x38]
-    c += T.bw(va + len(c), EDIT_BACK)
+    if next_va is None:
+        c += T.ldrh_imm(1, 0, 0x38)          # displaced: ldrh r1, [r0, #0x38]
+        c += T.bw(va + len(c), EDIT_BACK)
+    else:
+        c += T.bw(va + len(c), next_va)
     L["name"] = va + len(c)
     c += T.ldr_imm32(0, P5.DESC_ARRAY_PTR)
     c += T.ldr_imm(0, 0, 0)
@@ -133,6 +140,9 @@ def editw(va, L, empty_va):
     c += T.cmp_imm(1, 0)
     c += T.b_cond_w(va + len(c), "eq", L.get("posted", va))
     c += T.strb_imm(1, 0, KBD_OFF - 106)     # waiting flag = k + 1
+    if kbdf_off is not None:
+        c += T.movs_imm8(2, 0)
+        c += T.strb_w(2, 0, kbdf_off - 106)  # the label keyboard is not waiting
     c += T.subs_imm8(1, 1)
     c += T.movs_imm8(0, SECT_SZ)
     c += T.muls(0, 1)
@@ -199,6 +209,7 @@ def nameret(va, L, sh2_va, namefill_va):
     c += T.add_reg(0, 1)                     # section record 24 + k
     c += T.add_rd_sp(1, 0)
     c += T.bl(va + len(c), SETNAME)
+    c += LA.set_modified(0, 1)               # v067: name written -> preset modified (PSET Save); not on Cancel
     L["refresh"] = va + len(c)
     c += T.mov_reg(0, 5)
     c += T.bl(va + len(c), namefill_va)
@@ -225,8 +236,10 @@ ROWID_OFF, ROW_STRIDE = 0xB7C, 0x328        # page: row i's value widget id = [p
 MODE_PARAM = 0x1E
 
 
-def infn(va, L):
-    """b.w from INFO_SITE (r0 = r4 = session; r1-r3, r5 free; the dispatcher frame at sp is scratch)."""
+def infn(va, L, label_id=None):
+    """b.w from INFO_SITE (r0 = r4 = session; r1-r3, r5 free; the dispatcher frame at sp is scratch).
+    v066 `label_id`: on a mode-0x1E page with colpage == 0 (the clip page) the row id to match is label_id (the clip
+    Label row) instead of NAME_ID; the same 0x3C message then reaches EDITW -> CDEDIT. None emits the v056 bytes."""
     c = T.ldr_imm32(3, LA.SESSION + 0x8CA4)
     c += T.ldrb_imm(3, 3, 0)
     c += T.cmp_imm(3, MODE_PARAM)
@@ -238,8 +251,15 @@ def infn(va, L):
     c += T.ldr_imm32(2, LA.STATE_OFF + 106)      # colmenu.COLPAGE_OFF: k + 1 on the column page
     c += T.add_reg(3, 2)
     c += T.ldrb_imm(3, 3, 0)
-    c += T.cmp_imm(3, 0)
-    c += T.b_cond(va + len(c), "eq", L.get("stock", va))
+    if label_id is None:
+        c += T.cmp_imm(3, 0)
+        c += T.b_cond(va + len(c), "eq", L.get("stock", va))
+    else:
+        c += T.ldr_imm32(1, NAME_ID)                 # r1 = the row id that opens the keyboard
+        c += T.cmp_imm(3, 0)
+        c += T.b_cond(va + len(c), "ne", L.get("want", va))
+        c += T.ldr_imm32(1, label_id)                # clip page (colpage 0): the Label row
+        L["want"] = va + len(c)
     c += T.ldr_imm32(5, ROOT_PTR)
     c += T.ldr_imm(5, 5, 0)
     c += T.cmp_imm(5, 0)
@@ -259,8 +279,11 @@ def infn(va, L):
     c += T.ldr_imm32(2, ROWID_OFF)
     c += T.add_reg(3, 2)
     c += T.ldr_imm(3, 3, 0)                      # the row's param id
-    c += T.ldr_imm32(2, NAME_ID)
-    c += T.cmp_reg(3, 2)
+    if label_id is None:
+        c += T.ldr_imm32(2, NAME_ID)
+        c += T.cmp_reg(3, 2)
+    else:
+        c += T.cmp_reg(3, 1)
     c += T.b_cond(va + len(c), "ne", L.get("stock", va))
     c += T.movs_imm8(2, 0x3C)                    # msg {u16 0x3C, vt, 0, 0, id, 0} in the dispatcher frame
     c += T.str_sp(2, 0)
